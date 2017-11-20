@@ -1,47 +1,113 @@
 import math
 import logging
 
-from googleapiclient.discovery import build
+import googleapiclient.discovery
 
-from .resources import Video, Channel
+from .models import Video, Channel
 from .utils import datetime_to_string
 
 
 logger = logging.getLogger(__name__)
 
 
+class YouTube(object):
+
+    def __init__(self, key):
+        self.key = key
+        self.build = googleapiclient.discovery.build(
+            'youtube',
+            'v3',
+            developerKey=self.key,
+            cache_discovery=False,
+        )
+
+    def search(self, query=None, type_=None, after=None):
+        kwargs = {
+            'part': 'id,snippet',
+        }
+        if query:
+            kwargs['q'] = query
+        if type_:
+            kwargs['type'] = type_
+        if after:
+            kwargs['publishedAfter'] = datetime_to_string(after)
+
+        query = Query(self.build, 'search', kwargs)
+        return SearchListResponse(query)
+
+
+class Query(object):
+
+    def __init__(self, build, endpoint, kwargs=None):
+        self.build = build
+        self.endpoint = endpoint
+        self.kwargs = kwargs or dict()
+
+        if not 'part' in kwargs:
+            kwargs['part'] = 'id'
+
+        endpoint_func_mapping = {
+            'search': self.build.search().list
+        }
+
+        try:
+            self.query_func = endpoint_func_mapping[self.endpoint]
+        except KeyError:
+            raise ValueError(f"youtube api endpoint '{self.endpoint}' not recognised.")
+
+    def execute(self, kwargs=None):
+        if kwargs is not None:
+            query_kwargs = self.kwargs.copy()
+            query_kwargs.update(kwargs)
+        else:
+            query_kwargs = self.kwargs
+
+        return self.query_func(**query_kwargs).execute()
+
+
 class Response(object):
 
-    def __init__(self, raw, kwargs):
-        self.kwargs = kwargs
+    def __init__(self, query):
+        # execute a minimal query to check it works and get no. of results etc.
+        self.query = query
+        raw = self.query.execute(kwargs={
+            'part': 'id',
+            'maxResults': 0,
+        })
 
         self.kind = raw.get('kind')
         self.etag = raw.get('etag')
-        self.next_page_token = raw.get('nextPageToken')
         self.total_results = raw.get('pageInfo', {}).get('totalResults')
-        self.results_per_page = raw.get('pageInfo', {}).get('resultsPerPage')
-
-        self.page_items = raw.get('items')
-        self.n_pages = math.ceil(self.total_results/self.results_per_page)
         self.current_page = 1
+        self.next_page_token = ''
 
     def process_item(self, item):
         raise NotImplementedError("you must implement process_item() for this class.")
 
     def page(self):
-        for item in self.page_items:
-            yield self.process_item(item)
-        self.next_page()
+        if self.next_page_token is None:
+            return []
 
-    def next_page(self):
-        # self.page_items =
-        if self.current_page < self.n_pages:
+        kwargs = {'pageToken': self.next_page_token} if self.next_page_token else None
+        raw = self.query.execute(kwargs)
+
+        self.next_page_token = raw.get('nextPageToken')
+        page_items = raw.get('items')
+
+        for item in page_items:
+            yield item
+
+        if self.next_page_token is not None:
             self.current_page += 1
         else:
             self.current_page = None
 
+
     def all(self):
-        pass
+        self.current_page = 1
+        self.next_page_token = ''
+        while self.next_page_token is not None:
+            yield from self.page()
 
 
 class SearchListResponse(Response):
@@ -71,94 +137,3 @@ class SearchListResponse(Response):
         else:
             logger.warning(f"unrecognised resource kind '{resource_kind}'.")
             return None
-
-
-class YouTube(object):
-
-    def __init__(self, key):
-        self.key = key
-        self.youtube = build('youtube', 'v3', developerKey=self.key, cache_discovery=False)
-
-
-    def query_(self, resource='search', items_limit=50, kwargs=None, return_total=False):
-        # get the function we need to call for this resource type
-        resource_functions = {
-            'search': self.youtube.search().list,
-        }
-        try:
-            resource_func = resource_functions[resource]
-        except KeyError:
-            raise ValueError(f"youtube api resource '{resource}' not recognised.")
-
-        # work out how many pages to get, and how many results on each page
-        youtube_max_per_page = 50
-        if items_limit < 1:
-            return []
-        else:
-            kwargs['maxResults'] = youtube_max_per_page
-            page_limit = math.ceil(items_limit/youtube_max_per_page)
-            max_results_last_page = (items_limit % youtube_max_per_page) or youtube_max_per_page
-
-        # make sure kwargs is defined and missing values are filled in
-        if kwargs is None:
-            kwargs = {}
-        if not 'part' in kwargs:
-            kwargs['part'] = 'id'
-
-        # fetch the results
-        results = []
-        n_total_results = None
-        next_page = ''
-        pc = 0
-        while next_page is not None and pc < page_limit:
-            if pc == page_limit - 1:
-                kwargs['maxResults'] = max_results_last_page
-
-            kwargs['pageToken'] = next_page
-            response = resource_func(**kwargs).execute()
-            items = response.get('items', [])
-            next_page = response.get('nextPageToken', None)
-            n_total_results = response.get('pageInfo', {}).get('totalResults')
-
-            results += items
-            pc += 1
-
-        if return_total:
-            return results, n_total_results
-        else:
-            return results
-
-
-    def raw_query(self, resource='search', kwargs=None):
-        # get the function we need to call for this resource type
-        resource_functions = {
-            'search': self.youtube.search().list,
-        }
-        try:
-            resource_func = resource_functions[resource.lower()]
-        except KeyError:
-            raise ValueError(f"youtube api resource '{resource}' not recognised.")
-
-        # make sure kwargs is defined and missing values are filled in
-        if kwargs is None:
-            kwargs = {}
-        if not 'part' in kwargs:
-            kwargs['part'] = 'id'
-
-        # fetch the raw response from youtube
-        return resource_func(**kwargs).execute()
-
-
-    def search(self, query=None, type_=None, after=None):
-        kwargs = {
-            'part': 'id,snippet',
-        }
-        if query:
-            kwargs['q'] = query
-        if type_:
-            kwargs['type'] = type_
-        if after:
-            kwargs['publishedAfter'] = datetime_to_string(after)
-
-        raw = self.raw_query('search', kwargs)
-        return SearchListResponse(raw, kwargs)

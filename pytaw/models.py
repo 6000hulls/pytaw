@@ -1,12 +1,10 @@
 
 
-class Resource(object):
-
-    def __str__(self):
-        return f"<YouTube Resource: {self.id_}>"
+class ModelBase(object):
+    pass
 
 
-class Channel(Resource):
+class Channel(ModelBase):
 
     def __init__(self, id_, title=None, published_at=None):
         self.id_ = id_
@@ -17,7 +15,7 @@ class Channel(Resource):
         return f"<YouTube Channel: {self.id_} '{self.title}'>"
 
 
-class Video(Resource):
+class Video(ModelBase):
 
     def __init__(self, id_, title=None, published_at=None):
         self.id_ = id_
