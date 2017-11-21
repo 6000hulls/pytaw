@@ -1,9 +1,7 @@
 import math
 import logging
-
 import googleapiclient.discovery
 
-# from .models import Video, Channel
 from .utils import datetime_to_string, string_to_datetime
 
 
