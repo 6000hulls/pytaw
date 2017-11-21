@@ -56,6 +56,17 @@ class YouTube(object):
         query = Query(self.build, 'videos', kwargs)
         return ListResponse(query).first()
 
+    def channel(self, id_, extra_kwargs=None):
+        kwargs = {
+            'part': 'id,snippet',
+            'id': id_,
+        }
+        if extra_kwargs:
+            kwargs.update(extra_kwargs)
+
+        query = Query(self.build, 'channels', kwargs)
+        return ListResponse(query).first()
+
 
 class Query(object):
 
@@ -70,6 +81,7 @@ class Query(object):
         endpoint_func_mapping = {
             'search': self.build.search().list,
             'videos': self.build.videos().list,
+            'channels': self.build.channels().list,
         }
 
         try:
@@ -115,8 +127,6 @@ class ListResponse(object):
     def first(self):
         if self._first_page:
             return convert_item(self._first_page[0])
-        else:
-            return None
 
     def first_page(self):
         if self._first_page:
@@ -152,18 +162,37 @@ class Video(object):
         self.snippet = snippet or dict()
 
         # store data (or None if no snippet is given)
-        self.published_at = string_to_datetime(self.snippet.get('publishedAt'))
-        self.channel_id = self.snippet.get('channelId')
         self.title = self.snippet.get('title')
         self.description = self.snippet.get('description')
-        self.channel_title = self.snippet.get('channelTitle')
+        self.published_at = string_to_datetime(self.snippet.get('publishedAt'))
         self.tags = self.snippet.get('tags')
+        self.channel_id = self.snippet.get('channelId')
+        self.channel_title = self.snippet.get('channelTitle')
 
     def __repr__(self):
         if self.snippet:
             return "<Video {}: \"{:.32}\" by {}>".format(self.id_, self.title, self.channel_title)
         else:
             return "<Video {}>".format(self.id_)
+
+
+class Channel(object):
+
+    def __init__(self, id_, snippet=None):
+        self.id_ = id_
+        self.snippet = snippet or dict()
+
+        # store data (or None if no snippet is given)
+        self.title = self.snippet.get('title')
+        self.description = self.snippet.get('description')
+        self.published_at = string_to_datetime(self.snippet.get('publishedAt'))
+        self.country = self.snippet.get('channelId')
+
+    def __repr__(self):
+        if self.snippet:
+            return "<Channel {}: {}>".format(self.id_, self.title)
+        else:
+            return "<Channel {}>".format(self.id_)
 
 
 def convert_item(item):
@@ -178,3 +207,7 @@ def convert_item(item):
 
     if kind == 'video':
         return Video(id_, item.get('snippet'))
+    elif kind == 'channel':
+        return Channel(id_, item.get('snippet'))
+    else:
+        NotImplementedError(f"can't deal with resource kind {kind} yet.")
