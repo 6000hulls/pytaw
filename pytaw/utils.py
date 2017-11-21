@@ -6,10 +6,15 @@ import dateutil.parser
 
 
 def string_to_datetime(string):
-    return dateutil.parser.parse(string)
+    if string is None:
+        return None
+    else:
+        return dateutil.parser.parse(string)
 
 
 def datetime_to_string(dt):
+    if dt is None:
+        return None
     if dt.tzinfo is None:
         dt = dt.astimezone(timezone.utc)
     return dt.isoformat()

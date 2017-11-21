@@ -7,6 +7,8 @@ from .utils import datetime_to_string, string_to_datetime
 
 logger = logging.getLogger(__name__)
 
+MAX_SEARCH_RESULTS = 1000
+
 
 class YouTube(object):
 
@@ -19,7 +21,10 @@ class YouTube(object):
             cache_discovery=False,
         )
 
-    def search(self, search_string=None, type_=None, per_page=None, after=None):
+    def __repr__(self):
+        return "<YouTube object>"
+
+    def search(self, search_string=None, type_=None, per_page=None, after=None, extra_kwargs=None):
         kwargs = {
             'part': 'id,snippet',
         }
@@ -34,15 +39,20 @@ class YouTube(object):
             kwargs['maxResults'] = per_page
         if after:
             kwargs['publishedAfter'] = datetime_to_string(after)
+        if extra_kwargs:
+            kwargs.update(extra_kwargs)
 
         query = Query(self.build, 'search', kwargs)
         return ListResponse(query)
 
-    def video(self, id_):
+    def video(self, id_, extra_kwargs=None):
         kwargs = {
             'part': 'id,snippet',
             'id': id_,
         }
+        if extra_kwargs:
+            kwargs.update(extra_kwargs)
+
         query = Query(self.build, 'videos', kwargs)
         return ListResponse(query).first()
 
@@ -67,6 +77,9 @@ class Query(object):
         except KeyError:
             raise ValueError(f"youtube api endpoint '{self.endpoint}' not recognised.")
 
+    def __repr__(self):
+        return "<Query '{}' kwargs={}>".format(self.endpoint, self.kwargs)
+
     def execute(self, kwargs=None):
         if kwargs is not None:
             query_kwargs = self.kwargs.copy()
@@ -77,34 +90,27 @@ class Query(object):
         return self.query_func(**query_kwargs).execute()
 
 
-def convert_item(item):
-    kind = item['kind'].replace('youtube#', '')
-
-    if kind == 'searchResult':
-        kind = item['id']['kind'].replace('youtube#', '')
-        id_label = kind + 'Id'
-        id_ = item['id'][id_label]
-    else:
-        id_ = item['id']
-        
-    if kind == 'video':
-        return Video(id_, item.get('snippet'))
-
-
 class ListResponse(object):
 
     def __init__(self, query):
+        # execute query to get raw api response dictionary
         self.query = query
         raw = self.query.execute()
 
-        self.kind = raw.get('kind')
+        # store basic response info
+        self.kind = raw.get('kind').replace("youtube#", "")
         self.next_page_token = raw.get('nextPageToken')
-
         page_info = raw.get('pageInfo', {})
         self.total_results = page_info.get('totalResults')
         self.results_per_page = page_info.get('resultsPerPage')
 
+        # keep items on the first page in raw format
         self._first_page = raw.get('items')
+
+    def __repr__(self):
+        return "<ListResponse '{}': n={}, per_page={}>".format(
+            self.query.endpoint, self.total_results, self.results_per_page
+        )
 
     def first(self):
         if self._first_page:
@@ -112,7 +118,11 @@ class ListResponse(object):
         else:
             return None
 
-    def all(self, limit=None):
+    def first_page(self):
+        if self._first_page:
+            return [convert_item(item) for item in self._first_page]
+
+    def all(self, limit=MAX_SEARCH_RESULTS):
         page_items = self._first_page
         next_page_token = self.next_page_token
         items_yielded = 0
@@ -135,22 +145,36 @@ class ListResponse(object):
             page_no += 1
 
 
-
 class Video(object):
 
     def __init__(self, id_, snippet=None):
         self.id_ = id_
-        snippet = snippet or dict()
-
-        # convert date to datetime object
-        published_at = snippet.get('publishedAt')
-        if published_at:
-            published_at = string_to_datetime(published_at)
+        self.snippet = snippet or dict()
 
         # store data (or None if no snippet is given)
-        self.published_at = published_at
-        self.channel_id = snippet.get('channelId')
-        self.title = snippet.get('title')
-        self.description = snippet.get('description')
-        self.channel_title = snippet.get('channelTitle')
-        self.tags = snippet.get('tags')
+        self.published_at = string_to_datetime(self.snippet.get('publishedAt'))
+        self.channel_id = self.snippet.get('channelId')
+        self.title = self.snippet.get('title')
+        self.description = self.snippet.get('description')
+        self.channel_title = self.snippet.get('channelTitle')
+        self.tags = self.snippet.get('tags')
+
+    def __repr__(self):
+        if self.snippet:
+            return "<Video {}: \"{:.32}\" by {}>".format(self.id_, self.title, self.channel_title)
+        else:
+            return "<Video {}>".format(self.id_)
+
+
+def convert_item(item):
+    kind = item['kind'].replace('youtube#', '')
+
+    if kind == 'searchResult':
+        kind = item['id']['kind'].replace('youtube#', '')
+        id_label = kind + 'Id'
+        id_ = item['id'][id_label]
+    else:
+        id_ = item['id']
+
+    if kind == 'video':
+        return Video(id_, item.get('snippet'))
