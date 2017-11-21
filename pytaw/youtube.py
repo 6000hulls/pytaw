@@ -3,8 +3,8 @@ import logging
 
 import googleapiclient.discovery
 
-from .models import Video, Channel
-from .utils import datetime_to_string
+# from .models import Video, Channel
+from .utils import datetime_to_string, string_to_datetime
 
 
 logger = logging.getLogger(__name__)
@@ -21,19 +21,32 @@ class YouTube(object):
             cache_discovery=False,
         )
 
-    def search(self, query=None, type_=None, after=None):
+    def search(self, search_string=None, type_=None, per_page=None, after=None):
         kwargs = {
             'part': 'id,snippet',
         }
-        if query:
-            kwargs['q'] = query
+        if search_string:
+            kwargs['q'] = search_string
         if type_:
             kwargs['type'] = type_
+        if per_page:
+            if per_page > 50:
+                logger.warning("cannot fetch more than 50 results per page.")
+                per_page = 50
+            kwargs['maxResults'] = per_page
         if after:
             kwargs['publishedAfter'] = datetime_to_string(after)
 
         query = Query(self.build, 'search', kwargs)
-        return SearchListResponse(query)
+        return ListResponse(query)
+
+    def video(self, id_):
+        kwargs = {
+            'part': 'id,snippet',
+            'id': id_,
+        }
+        query = Query(self.build, 'videos', kwargs)
+        return ListResponse(query).first()
 
 
 class Query(object):
@@ -47,7 +60,8 @@ class Query(object):
             kwargs['part'] = 'id'
 
         endpoint_func_mapping = {
-            'search': self.build.search().list
+            'search': self.build.search().list,
+            'videos': self.build.videos().list,
         }
 
         try:
@@ -65,75 +79,80 @@ class Query(object):
         return self.query_func(**query_kwargs).execute()
 
 
-class Response(object):
+def convert_item(item):
+    kind = item['kind'].replace('youtube#', '')
+
+    if kind == 'searchResult':
+        kind = item['id']['kind'].replace('youtube#', '')
+        id_label = kind + 'Id'
+        id_ = item['id'][id_label]
+    else:
+        id_ = item['id']
+        
+    if kind == 'video':
+        return Video(id_, item.get('snippet'))
+
+
+class ListResponse(object):
 
     def __init__(self, query):
-        # execute a minimal query to check it works and get no. of results etc.
         self.query = query
-        raw = self.query.execute(kwargs={
-            'part': 'id',
-            'maxResults': 0,
-        })
+        raw = self.query.execute()
 
         self.kind = raw.get('kind')
-        self.etag = raw.get('etag')
-        self.total_results = raw.get('pageInfo', {}).get('totalResults')
-        self.current_page = 1
-        self.next_page_token = ''
-
-    def process_item(self, item):
-        raise NotImplementedError("you must implement process_item() for this class.")
-
-    def page(self):
-        if self.next_page_token is None:
-            return []
-
-        kwargs = {'pageToken': self.next_page_token} if self.next_page_token else None
-        raw = self.query.execute(kwargs)
-
         self.next_page_token = raw.get('nextPageToken')
-        page_items = raw.get('items')
 
-        for item in page_items:
-            yield item
+        page_info = raw.get('pageInfo', {})
+        self.total_results = page_info.get('totalResults')
+        self.results_per_page = page_info.get('resultsPerPage')
 
-        if self.next_page_token is not None:
-            self.current_page += 1
+        self._first_page = raw.get('items')
+
+    def first(self):
+        if self._first_page:
+            return convert_item(self._first_page[0])
         else:
-            self.current_page = None
-
-
-    def all(self):
-        self.current_page = 1
-        self.next_page_token = ''
-        while self.next_page_token is not None:
-            yield from self.page()
-
-
-class SearchListResponse(Response):
-
-    resource_type = 'search'
-
-    def process_item(self, item):
-        kind = item.get('kind')
-        if kind != "youtube#searchResult":
-            logger.info("search result kind is '{kind}', expected 'youtube#searchResult'.")
-
-        resource_kind = item.get('id', {}).get('kind')
-        if resource_kind == "youtube#video":
-            kwargs = {
-                'id_': item.get('id', {}).get('videoId'),
-                'title': item.get('snippet', {}).get('title'),
-                'published_at': item.get('snippet', {}).get('publishedAt'),
-            }
-            return Video(**kwargs)
-        elif resource_kind == "youtube#channel":
-            kwargs = {
-                'id_': item.get('id', {}).get('channelId'),
-                'title': item.get('snippet', {}).get('title'),
-                'published_at': item.get('snippet', {}).get('publishedAt'),
-            }
-            return Channel(**kwargs)
-        else:
-            logger.warning(f"unrecognised resource kind '{resource_kind}'.")
             return None
+
+    def all(self, limit=None):
+        page_items = self._first_page
+        next_page_token = self.next_page_token
+        items_yielded = 0
+        page_no = 1
+        while True:
+            if page_no > 1:
+                raw = self.query.execute({'pageToken': next_page_token})
+                page_items = raw.get('items')
+                next_page_token = raw.get('nextPageToken')
+
+            for item in page_items:
+                yield convert_item(item)
+                items_yielded += 1
+                if items_yielded >= limit:
+                    return
+
+            if next_page_token is None:
+                break
+
+            page_no += 1
+
+
+
+class Video(object):
+
+    def __init__(self, id_, snippet=None):
+        self.id_ = id_
+        snippet = snippet or dict()
+
+        # convert date to datetime object
+        published_at = snippet.get('publishedAt')
+        if published_at:
+            published_at = string_to_datetime(published_at)
+
+        # store data (or None if no snippet is given)
+        self.published_at = published_at
+        self.channel_id = snippet.get('channelId')
+        self.title = snippet.get('title')
+        self.description = snippet.get('description')
+        self.channel_title = snippet.get('channelTitle')
+        self.tags = snippet.get('tags')
