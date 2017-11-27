@@ -30,7 +30,7 @@ class TestVideo(object):
         assert video.published_at.isoformat() == '2005-04-24T03:31:52+00:00'
 
     def test_video_n_views(self, video):
-        assert int(video.n_views) > int(40e6)
+        assert video.n_views > int(40e6)
 
 class TestChannel(object):
 

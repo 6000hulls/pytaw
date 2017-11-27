@@ -15,7 +15,12 @@ CONFIG_FILE_PATH = "config.ini"
 
 
 class YouTube(object):
-    """Provides a connection to the YouTube API, and some high-level methods for querying it."""
+    """The interface to the YouTube API.
+
+    Connects to the API by passing a developer api key, and provides some high-level methods for
+    querying it.
+
+    """
 
     def __init__(self, key=None, part=None):
         """Initialise the YouTube class.
@@ -38,7 +43,7 @@ class YouTube(object):
         # the default 'part' string to use for requests to the api.
         # this effects how much data a query returns, as well as the quota cost of that query.
         if part is None:
-            self.part = "id,snippet,contentDetails"
+            self.part = "id"
         else:
             self.part = part
 
@@ -123,7 +128,7 @@ class YouTube(object):
 
 
 class Query(object):
-    """Everything we need to execute a query and retrive a (raw) response."""
+    """Everything we need to execute a query and retrieve the raw response dictionary."""
 
     def __init__(self, youtube, endpoint, kwargs=None):
         """Initialise the query.
@@ -304,9 +309,7 @@ class Resource(ABC):
         ).execute()
 
         item = response['items'][0]
-        print(item)
         self._item.update(item)
-        print(self._item)
 
     def __getattr__(self, item):
         return self._get_or_query(*self.attribute_lookup[item])
@@ -344,6 +347,13 @@ class Video(Resource):
     def duration(self):
         duration_iso8601 = self._get_or_query('contentDetails', 'duration')
         return timedelta(seconds=youtube_duration_to_seconds(duration_iso8601))
+
+    def __getattr__(self, item):
+        attribute = super().__getattr__(item)
+        if len(item) > 2 and item[:2] == 'n_':
+            attribute = int(attribute)
+        return attribute
+
 
 
 class Channel(Resource):
