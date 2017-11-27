@@ -42,7 +42,7 @@ class YouTube(object):
         if extra_kwargs:
             kwargs.update(extra_kwargs)
 
-        query = Query(self.build, 'search', kwargs)
+        query = Query(self, 'search', kwargs)
         return ListResponse(query)
 
     def video(self, id_, extra_kwargs=None):
@@ -53,7 +53,7 @@ class YouTube(object):
         if extra_kwargs:
             kwargs.update(extra_kwargs)
 
-        query = Query(self.build, 'videos', kwargs)
+        query = Query(self, 'videos', kwargs)
         return ListResponse(query).first()
 
     def channel(self, id_, extra_kwargs=None):
@@ -64,14 +64,14 @@ class YouTube(object):
         if extra_kwargs:
             kwargs.update(extra_kwargs)
 
-        query = Query(self.build, 'channels', kwargs)
+        query = Query(self, 'channels', kwargs)
         return ListResponse(query).first()
 
 
 class Query(object):
 
-    def __init__(self, build, endpoint, kwargs=None):
-        self.build = build
+    def __init__(self, youtube, endpoint, kwargs=None):
+        self.youtube = youtube
         self.endpoint = endpoint
         self.kwargs = kwargs or dict()
 
@@ -79,9 +79,9 @@ class Query(object):
             kwargs['part'] = 'id'
 
         endpoint_func_mapping = {
-            'search': self.build.search().list,
-            'videos': self.build.videos().list,
-            'channels': self.build.channels().list,
+            'search': self.youtube.build.search().list,
+            'videos': self.youtube.build.videos().list,
+            'channels': self.youtube.build.channels().list,
         }
 
         try:
