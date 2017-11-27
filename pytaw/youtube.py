@@ -17,6 +17,7 @@ CONFIG_FILE_PATH = "config.ini"
 class YouTube(object):
 
     def __init__(self, key=None, part=None):
+        # developer api key may be specified at initialisation, or in a config file
         if key is None:
             if os.path.exists(CONFIG_FILE_PATH):
                 config = configparser.ConfigParser()
@@ -27,6 +28,8 @@ class YouTube(object):
         else:
             self.key = key
 
+        # the default 'part' string to use for requests to the api.
+        # this effects how much data a query returns, as well as the quota cost of that query.
         if part is None:
             self.part = "id,snippet,contentDetails"
         else:
@@ -36,7 +39,7 @@ class YouTube(object):
             'youtube',
             'v3',
             developerKey=self.key,
-            cache_discovery=False,      # supress a warning
+            cache_discovery=False,      # suppress a warning
         )
 
     def __repr__(self):
