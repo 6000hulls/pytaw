@@ -1,5 +1,7 @@
 import math
+import os
 import logging
+import configparser
 import googleapiclient.discovery
 
 from .utils import datetime_to_string, string_to_datetime
@@ -8,17 +10,27 @@ from .utils import datetime_to_string, string_to_datetime
 logger = logging.getLogger(__name__)
 
 MAX_SEARCH_RESULTS = 1000
+CONFIG_FILE_PATH = "config.ini"
 
 
 class YouTube(object):
 
-    def __init__(self, key):
-        self.key = key
+    def __init__(self, key=None):
+        if key is None:
+            if os.path.exists(CONFIG_FILE_PATH):
+                config = configparser.ConfigParser()
+                config.read(CONFIG_FILE_PATH)
+                self.key = config['youtube']['developer_key']
+            else:
+                raise ValueError("api key not provided.")
+        else:
+            self.key = key
+
         self.build = googleapiclient.discovery.build(
             'youtube',
             'v3',
             developerKey=self.key,
-            cache_discovery=False,
+            cache_discovery=False,      # supress a warning
         )
 
     def __repr__(self):
