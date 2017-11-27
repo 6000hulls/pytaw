@@ -5,6 +5,7 @@ import configparser
 import googleapiclient.discovery
 
 from .utils import datetime_to_string, string_to_datetime
+from .resources import Video, Channel
 
 
 logger = logging.getLogger(__name__)
@@ -15,7 +16,7 @@ CONFIG_FILE_PATH = "config.ini"
 
 class YouTube(object):
 
-    def __init__(self, key=None):
+    def __init__(self, key=None, part=None):
         if key is None:
             if os.path.exists(CONFIG_FILE_PATH):
                 config = configparser.ConfigParser()
@@ -25,6 +26,11 @@ class YouTube(object):
                 raise ValueError("api key not provided.")
         else:
             self.key = key
+
+        if part is None:
+            self.part = "id,snippet,contentDetails"
+        else:
+            self.part = part
 
         self.build = googleapiclient.discovery.build(
             'youtube',
@@ -38,7 +44,7 @@ class YouTube(object):
 
     def search(self, search_string=None, type_=None, per_page=None, after=None, extra_kwargs=None):
         kwargs = {
-            'part': 'id,snippet',
+            'part': self.part,
         }
         if search_string:
             kwargs['q'] = search_string
@@ -57,10 +63,10 @@ class YouTube(object):
         query = Query(self, 'search', kwargs)
         return ListResponse(query)
 
-    def video(self, id_, extra_kwargs=None):
+    def video(self, id, extra_kwargs=None):
         kwargs = {
-            'part': 'id,snippet',
-            'id': id_,
+            'part': self.part,
+            'id': id,
         }
         if extra_kwargs:
             kwargs.update(extra_kwargs)
@@ -68,10 +74,10 @@ class YouTube(object):
         query = Query(self, 'videos', kwargs)
         return ListResponse(query).first()
 
-    def channel(self, id_, extra_kwargs=None):
+    def channel(self, id, extra_kwargs=None):
         kwargs = {
-            'part': 'id,snippet',
-            'id': id_,
+            'part': self.part,
+            'id': id,
         }
         if extra_kwargs:
             kwargs.update(extra_kwargs)
@@ -88,7 +94,7 @@ class Query(object):
         self.kwargs = kwargs or dict()
 
         if not 'part' in kwargs:
-            kwargs['part'] = 'id'
+            kwargs['part'] = self.youtube.part
 
         endpoint_func_mapping = {
             'search': self.youtube.build.search().list,
@@ -138,11 +144,11 @@ class ListResponse(object):
 
     def first(self):
         if self._first_page:
-            return convert_item(self._first_page[0])
+            return create_resource_from_api_response(self._first_page[0])
 
     def first_page(self):
         if self._first_page:
-            return [convert_item(item) for item in self._first_page]
+            return [create_resource_from_api_response(item) for item in self._first_page]
 
     def all(self, limit=MAX_SEARCH_RESULTS):
         page_items = self._first_page
@@ -156,7 +162,7 @@ class ListResponse(object):
                 next_page_token = raw.get('nextPageToken')
 
             for item in page_items:
-                yield convert_item(item)
+                yield create_resource_from_api_response(item)
                 items_yielded += 1
                 if items_yielded >= limit:
                     return
@@ -167,59 +173,19 @@ class ListResponse(object):
             page_no += 1
 
 
-class Video(object):
+def create_resource_from_api_response(item):
+        kind = item['kind'].replace('youtube#', '')
 
-    def __init__(self, id_, snippet=None):
-        self.id_ = id_
-        self.snippet = snippet or dict()
-
-        # store data (or None if no snippet is given)
-        self.title = self.snippet.get('title')
-        self.description = self.snippet.get('description')
-        self.published_at = string_to_datetime(self.snippet.get('publishedAt'))
-        self.tags = self.snippet.get('tags')
-        self.channel_id = self.snippet.get('channelId')
-        self.channel_title = self.snippet.get('channelTitle')
-
-    def __repr__(self):
-        if self.snippet:
-            return "<Video {}: \"{:.32}\" by {}>".format(self.id_, self.title, self.channel_title)
+        if kind == 'searchResult':
+            kind = item['id']['kind'].replace('youtube#', '')
+            id_label = kind + 'Id'
+            id = item['id'][id_label]
         else:
-            return "<Video {}>".format(self.id_)
+            id = item['id']
 
-
-class Channel(object):
-
-    def __init__(self, id_, snippet=None):
-        self.id_ = id_
-        self.snippet = snippet or dict()
-
-        # store data (or None if no snippet is given)
-        self.title = self.snippet.get('title')
-        self.description = self.snippet.get('description')
-        self.published_at = string_to_datetime(self.snippet.get('publishedAt'))
-        self.country = self.snippet.get('channelId')
-
-    def __repr__(self):
-        if self.snippet:
-            return "<Channel {}: {}>".format(self.id_, self.title)
+        if kind == 'video':
+            return Video(id, item)
+        elif kind == 'channel':
+            return Channel(id, item)
         else:
-            return "<Channel {}>".format(self.id_)
-
-
-def convert_item(item):
-    kind = item['kind'].replace('youtube#', '')
-
-    if kind == 'searchResult':
-        kind = item['id']['kind'].replace('youtube#', '')
-        id_label = kind + 'Id'
-        id_ = item['id'][id_label]
-    else:
-        id_ = item['id']
-
-    if kind == 'video':
-        return Video(id_, item.get('snippet'))
-    elif kind == 'channel':
-        return Channel(id_, item.get('snippet'))
-    else:
-        NotImplementedError(f"can't deal with resource kind {kind} yet.")
+            NotImplementedError(f"can't deal with resource kind {kind} yet.")
