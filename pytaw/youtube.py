@@ -300,18 +300,33 @@ class Resource(ABC):
         response = Query(
             youtube=self.youtube,
             endpoint=self.resource_endpoint,
-            kwargs={'part': part_string}
+            kwargs={'part': part_string, 'id': self.id}
         ).execute()
 
-        self._item.update(response[part])
+        item = response['items'][0]
+        print(item)
+        self._item.update(item)
+        print(self._item)
+
+    def __getattr__(self, item):
+        return self._get_or_query(*self.attribute_lookup[item])
 
 
 class Video(Resource):
     resource_type = 'video'
     resource_endpoint = 'videos'
     attribute_lookup = {
-        'title': ('snippet', 'title'),
-        'description': ('snippet', 'description'),
+        'title':            ('snippet', 'title'),
+        'description':      ('snippet', 'description'),
+        'tags':             ('snippet', 'tags'),
+        'channel_id':       ('snippet', 'channelId'),
+        'channel_title':    ('snippet', 'channelTitle'),
+        'status':           ('status', 'license'),
+        'n_views':          ('statistics', 'viewCount'),
+        'n_likes':          ('statistics', 'likeCount'),
+        'n_dislikes':       ('statistics', 'dislikeCount'),
+        'n_favorites':      ('statistics', 'favoriteCount'),
+        'n_comments':       ('statistics', 'commentCount'),
     }
 
     def __repr__(self):
@@ -330,9 +345,6 @@ class Video(Resource):
         duration_iso8601 = self._get_or_query('contentDetails', 'duration')
         return timedelta(seconds=youtube_duration_to_seconds(duration_iso8601))
 
-    def __getattr__(self, item):
-        return self._get_or_query(*self.attribute_lookup[item])
-
 
 class Channel(Resource):
     resource_type = 'channel'
@@ -345,9 +357,6 @@ class Channel(Resource):
     def published_at(self):
         published_at = self._get_or_query('snippet', 'publishedAt')
         return string_to_datetime(published_at)
-
-    def __getattr__(self, item):
-        return self._get_or_query(*self.attribute_lookup[item])
 
     def __repr__(self):
         if self.title:
