@@ -15,8 +15,15 @@ CONFIG_FILE_PATH = "config.ini"
 
 
 class YouTube(object):
+    """Provides a connection to the YouTube API, and some high-level methods for querying it."""
 
     def __init__(self, key=None, part=None):
+        """Initialise the YouTube class.
+
+        :param key: developer api key (you need to get this from google)
+        :param part: default part string for api queries.  default: 'id,snippet,contentDetails'.
+
+        """
         # developer api key may be specified at initialisation, or in a config file
         if key is None:
             if os.path.exists(CONFIG_FILE_PATH):
@@ -46,6 +53,18 @@ class YouTube(object):
         return "<YouTube object>"
 
     def search(self, search_string=None, type_=None, per_page=None, after=None, extra_kwargs=None):
+        """Search YouTube, returning an instance of `ListResponse`.
+
+        :param search_string: search query
+        :param type_: type of resource to search (by default a search will contain many
+            different resource types, including videos, channels, playlists etc.)
+        :param per_page: how many results to return per request (max. 50)
+        :param after: limit results to resources published after this date by providing a
+            datetime instance
+        :param extra_kwargs: extra keyword arguments to pass to the search function
+        :return: ListResponse object containing the requested resource instances
+
+        """
         kwargs = {
             'part': self.part,
         }
@@ -67,6 +86,13 @@ class YouTube(object):
         return ListResponse(query)
 
     def video(self, id, extra_kwargs=None):
+        """Fetch a Video instance.
+
+        :param id: youtube video id e.g. 'jNQXAC9IVRw'
+        :param extra_kwargs: extra keyword arguments to send with the query
+        :return: Video instance if video is found, else None
+
+        """
         kwargs = {
             'part': self.part,
             'id': id,
@@ -78,6 +104,13 @@ class YouTube(object):
         return ListResponse(query).first()
 
     def channel(self, id, extra_kwargs=None):
+        """Fetch a Channel instance.
+
+        :param id: youtube channel id e.g. 'UCMDQxm7cUx3yXkfeHa5zJIQ'
+        :param extra_kwargs: extra keyword arguments to send with the query
+        :return: Channel instance if channel is found, else None
+
+        """
         kwargs = {
             'part': self.part,
             'id': id,
@@ -90,8 +123,16 @@ class YouTube(object):
 
 
 class Query(object):
+    """Everything we need to execute a query and retrive a (raw) response."""
 
     def __init__(self, youtube, endpoint, kwargs=None):
+        """Initialise the query.
+
+        :param youtube: YouTube instance
+        :param endpoint: string giving the endpoing to query, e.g. 'videos', 'search'...
+        :param kwargs: keyword arguments to send with the query
+
+        """
         self.youtube = youtube
         self.endpoint = endpoint
         self.kwargs = kwargs or dict()
@@ -114,6 +155,12 @@ class Query(object):
         return "<Query '{}' kwargs={}>".format(self.endpoint, self.kwargs)
 
     def execute(self, kwargs=None):
+        """Execute the query.
+
+        :param kwargs: extra keyword arguments to send with the query.
+        :return: api response dictionary
+
+        """
         if kwargs is not None:
             query_kwargs = self.kwargs.copy()
             query_kwargs.update(kwargs)
