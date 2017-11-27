@@ -1,11 +1,11 @@
-import math
+from abc import ABC, abstractmethod
+from datetime import timedelta
 import os
 import logging
 import configparser
 import googleapiclient.discovery
 
-from .utils import datetime_to_string, string_to_datetime
-from .resources import Video, Channel
+from .utils import datetime_to_string, string_to_datetime, youtube_duration_to_seconds
 
 
 logger = logging.getLogger(__name__)
@@ -194,11 +194,12 @@ class ListResponse(object):
 
     def first(self):
         if self._first_page:
-            return create_resource_from_api_response(self._first_page[0])
+            return create_resource_from_api_response(self.query.youtube, self._first_page[0])
 
     def first_page(self):
         if self._first_page:
-            return [create_resource_from_api_response(item) for item in self._first_page]
+            return [create_resource_from_api_response(self.query.youtube, item)
+                    for item in self._first_page]
 
     def all(self, limit=MAX_SEARCH_RESULTS):
         page_items = self._first_page
@@ -223,7 +224,7 @@ class ListResponse(object):
             page_no += 1
 
 
-def create_resource_from_api_response(item):
+def create_resource_from_api_response(youtube, item):
         kind = item['kind'].replace('youtube#', '')
 
         if kind == 'searchResult':
@@ -234,8 +235,122 @@ def create_resource_from_api_response(item):
             id = item['id']
 
         if kind == 'video':
-            return Video(id, item)
+            return Video(youtube, id, item)
         elif kind == 'channel':
-            return Channel(id, item)
+            return Channel(youtube, id, item)
         else:
             NotImplementedError(f"can't deal with resource kind {kind} yet.")
+
+
+class Resource(ABC):
+    """Abtract base class for YouTube resource classes, e.g. Video, Channel etc."""
+
+    resource_type = None
+    resource_endpoint = None
+    attribute_lookup = None
+
+    def __init__(self, youtube, id, item):
+        # if we need to query again for more data we'll need access to the youtube instance
+        self.youtube = youtube
+
+        # every resource has a unique id, it may be a different format for each resource type though
+        self.id = id
+
+        # this is the api response item for the resource.  it's a dictionary with 'kind',
+        # 'etag' and 'id' keys, at least.  it may also have a 'snippet', 'contentDetails' etc.
+        # containing more detailed info.  in theroy, this dictionary could be access directly,
+        # but we'll make the data accessible via class attributes where possible.
+        self._item = item
+
+    def _get(self, *keys):
+        """Get a data attribute from the stored item response, if it exists.
+
+        If it doesn't, return None.  This could be because the necessary information was not
+        included in the 'part' argument in the original query, or simply because the data
+        attribute doesn't exist in the response.
+
+        :param *keys: one or more dictionary keys.  if there's more than one, we'll query
+            them recursively, so _get('snippet', 'title') will return
+            self._items['snippet']['title']
+        :return: the data attribute
+
+        """
+        param = self._item
+        for key in keys:
+            param = param.get(key, None)
+            if param is None:
+                return None
+
+        return param
+
+    def _get_or_query(self, part, attribute):
+        value = self._get(part, attribute)
+        if value is not None:
+            return value
+
+        self._update_item(part)
+        value = self._get(part, attribute)
+        if value is None:
+            raise ValueError(f"can't find attribute {attribute} in part {part}")
+
+        return value
+
+    def _update_item(self, part):
+        part_string = f"id,{part}"
+        response = Query(
+            youtube=self.youtube,
+            endpoint=self.resource_endpoint,
+            kwargs={'part': part_string}
+        ).execute()
+
+        self._item.update(response[part])
+
+
+class Video(Resource):
+    resource_type = 'video'
+    resource_endpoint = 'videos'
+    attribute_lookup = {
+        'title': ('snippet', 'title'),
+        'description': ('snippet', 'description'),
+    }
+
+    def __repr__(self):
+        if self.title:
+            return "<Video {}: {}>".format(self.id, self.title)
+        else:
+            return "<Video {}>".format(self.id)
+
+    @property
+    def published_at(self):
+        published_at = self._get_or_query('snippet', 'publishedAt')
+        return string_to_datetime(published_at)
+
+    @property
+    def duration(self):
+        duration_iso8601 = self._get_or_query('contentDetails', 'duration')
+        return timedelta(seconds=youtube_duration_to_seconds(duration_iso8601))
+
+    def __getattr__(self, item):
+        return self._get_or_query(*self.attribute_lookup[item])
+
+
+class Channel(Resource):
+    resource_type = 'channel'
+    resource_endpoint = 'channels'
+    attribute_lookup = {
+        'title': ('snippet', 'title'),
+    }
+
+    @property
+    def published_at(self):
+        published_at = self._get_or_query('snippet', 'publishedAt')
+        return string_to_datetime(published_at)
+
+    def __getattr__(self, item):
+        return self._get_or_query(*self.attribute_lookup[item])
+
+    def __repr__(self):
+        if self.title:
+            return "<Channel {}: {}>".format(self.id, self.title)
+        else:
+            return "<Channel {}>".format(self.id)
