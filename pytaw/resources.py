@@ -1,11 +1,11 @@
+from abc import ABC, abstractmethod
 from datetime import timedelta
 
 from .utils import string_to_datetime, youtube_duration_to_seconds
 
 
-class Resource(object):
-
-    resource_type = 'resource'
+class Resource(ABC):
+    """Abtract base class for YouTube resource classes, e.g. Video, Channel etc."""
 
     def __init__(self, id, item):
         # every resource has a unique id, it'll be a different format for each resource type though
@@ -23,9 +23,16 @@ class Resource(object):
         self._set_attributes()
 
     def _get(self, *keys):
-        """Get an attribute from the stored item response, if it exists.
+        """Get a data attribute from the stored item response, if it exists.
 
-        If it doesn't, return None.
+        If it doesn't, return None.  This could be because the necessary information was not
+        included in the 'part' argument in the original query, or simply because the data
+        attribute doesn't exist in the response.
+
+        :param *keys: one or more dictionary keys.  if there's more than one, we'll query
+            them recursively, so _get('snippet', 'title') will return
+            self._items['snippet']['title']
+        :return: the data attribute
 
         """
         param = self._item
@@ -36,8 +43,9 @@ class Resource(object):
 
         return param
 
+    @abstractmethod
     def _set_attributes(self):
-        raise NotImplementedError("method should be overridden by subclass.")
+        pass
 
 
 class Video(Resource):
