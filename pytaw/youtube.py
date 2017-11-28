@@ -247,14 +247,6 @@ def create_resource_from_api_response(youtube, item):
             NotImplementedError(f"can't deal with resource kind {kind} yet.")
 
 
-class AttributeDef(object):
-
-    def __init__(self, part, name, type_=None):
-        self.part = part
-        self.name = name
-        self.type_ = type_ or 'string'
-
-
 class Resource(object):
     """Base class for YouTube resource classes, e.g. Video, Channel etc."""
 
@@ -262,6 +254,12 @@ class Resource(object):
     ATTRIBUTE_DEFS = {}
 
     def __init__(self, youtube, id, data=None):
+        """Initialise a Resource object.
+
+        Need the YouTube instance, in case further queries are required, the resource id,
+        and (optionally) some data in the form of an API response.
+
+        """
         # if we need to query again for more data we'll need access to the youtube instance
         self.youtube = youtube
 
@@ -286,8 +284,8 @@ class Resource(object):
         attribute doesn't exist in the response.
 
         :param *keys: one or more dictionary keys.  if there's more than one, we'll query
-            them recursively, so _get('snippet', 'title') will return
-            self._items['snippet']['title']
+            them recursively, so _get('a', 'b', 'c') will return
+            self._items['a']['b']['c']
         :return: the data attribute
 
         """
@@ -300,6 +298,14 @@ class Resource(object):
         return param
 
     def _fetch(self, part):
+        """Query the API for a specific data part.
+
+        Build a query and execute it.  Update internal storage to reflect the new data.  Note:
+        access to the data via attributes will not update until _update_attributes() is called.
+
+        :param part: part string for the API query.
+
+        """
         part_string = f"id,{part}"
 
         # get a raw listResponse from youtube
@@ -315,7 +321,12 @@ class Resource(object):
 
 
     def _update_attributes(self):
-        """Take internally stored raw data and creates attributes with right types etc."""
+        """Take internally stored raw data and creates attributes with right types etc.
+
+        Attributes defined in ATTRIBUTE_DEFS will be added as attributes, if they exist in
+        internal data storage.
+
+        """
         for attr_name, attr_def in self.ATTRIBUTE_DEFS.items():
             # get the value, if it exists in the data store
             raw_value = self._get(attr_def.part, attr_def.name)
@@ -338,6 +349,14 @@ class Resource(object):
             setattr(self, attr_name, value)
 
     def __getattr__(self, item):
+        """If an attribute hasn't been set, this function tries to fetch and add it.
+
+        But if the attribute isn't present in ATTRIBUTE_DEFS, we raise an AttributeError.
+
+        :param item: attribute name
+        :return: attribute value
+
+        """
         if item in self.ATTRIBUTE_DEFS:
             self._fetch(part=self.ATTRIBUTE_DEFS[item].part)
             self._update_attributes()
@@ -347,7 +366,30 @@ class Resource(object):
                              f"'{self.__name__}'")
 
 
+class AttributeDef(object):
+    """Defines a Resource attribute.
+
+    To make the API data available as attributes on Resource objects we need to know
+        1. where to find the data in the API response, and
+        2. what data type the attribute should have.
+
+    This class defines the 'part' (in API terminology) that the attribute can be found in,
+    and it's name (the dictionary key within the 'part'), so that it can be found in the API
+    response.
+
+    The data type should also be given as a string ('string', 'int', 'datetime' etc),
+    so that we can convert it when we add the data as an attribute to the Resource instance.  The
+    default is 'string'.
+
+    """
+    def __init__(self, part, name, type_=None):
+        self.part = part
+        self.name = name
+        self.type_ = type_ or 'string'
+
+
 class Video(Resource):
+    """A single YouTube video."""
 
     ENDPOINT = 'videos'
     ATTRIBUTE_DEFS = {
@@ -358,6 +400,7 @@ class Video(Resource):
 
 
 class Channel(Resource):
+    """A single YouTube channel."""
 
     ENDPOINT = 'channels'
     ATTRIBUTE_DEFS = {
