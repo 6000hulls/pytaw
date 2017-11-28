@@ -247,14 +247,21 @@ def create_resource_from_api_response(youtube, item):
             NotImplementedError(f"can't deal with resource kind {kind} yet.")
 
 
-class Resource(ABC):
-    """Abtract base class for YouTube resource classes, e.g. Video, Channel etc."""
+class AttributeDef(object):
 
-    resource_type = None
-    resource_endpoint = None
-    attribute_lookup = None
+    def __init__(self, part, name, type_=None):
+        self.part = part
+        self.name = name
+        self.type_ = type_ or 'string'
 
-    def __init__(self, youtube, id, item):
+
+class Resource(object):
+    """Base class for YouTube resource classes, e.g. Video, Channel etc."""
+
+    ENDPOINT = ''
+    ATTRIBUTE_DEFS = {}
+
+    def __init__(self, youtube, id, data=None):
         # if we need to query again for more data we'll need access to the youtube instance
         self.youtube = youtube
 
@@ -263,9 +270,13 @@ class Resource(ABC):
 
         # this is the api response item for the resource.  it's a dictionary with 'kind',
         # 'etag' and 'id' keys, at least.  it may also have a 'snippet', 'contentDetails' etc.
-        # containing more detailed info.  in theroy, this dictionary could be access directly,
-        # but we'll make the data accessible via class attributes where possible.
-        self._item = item
+        # containing more detailed info.  in theory, this dictionary could be accessed directly,
+        # but we'll make the data accessible via class attributes where possible so that we can
+        # do type conversion etc.
+        self._data = data or {}
+
+        # update attributes with whatever we've been given as data
+        self._update_attributes()
 
     def _get(self, *keys):
         """Get a data attribute from the stored item response, if it exists.
@@ -280,7 +291,7 @@ class Resource(ABC):
         :return: the data attribute
 
         """
-        param = self._item
+        param = self._data
         for key in keys:
             param = param.get(key, None)
             if param is None:
@@ -288,88 +299,68 @@ class Resource(ABC):
 
         return param
 
-    def _get_or_query(self, part, attribute):
-        value = self._get(part, attribute)
-        if value is not None:
-            return value
-
-        self._update_item(part)
-        value = self._get(part, attribute)
-        if value is None:
-            raise ValueError(f"can't find attribute {attribute} in part {part}")
-
-        return value
-
-    def _update_item(self, part):
+    def _fetch(self, part):
         part_string = f"id,{part}"
+
+        # get a raw listResponse from youtube
         response = Query(
             youtube=self.youtube,
-            endpoint=self.resource_endpoint,
+            endpoint=self.ENDPOINT,
             kwargs={'part': part_string, 'id': self.id}
         ).execute()
 
+        # get the first resource item and update the internal data storage
         item = response['items'][0]
-        self._item.update(item)
+        self._data.update(item)
+
+
+    def _update_attributes(self):
+        """Take internally stored raw data and creates attributes with right types etc."""
+        for attr_name, attr_def in self.ATTRIBUTE_DEFS.items():
+            # get the value, if it exists in the data store
+            raw_value = self._get(attr_def.part, attr_def.name)
+            if raw_value is None:
+                continue
+
+            if attr_def.type_ in ('str', 'string'):
+                value = raw_value
+            elif attr_def.type_ in ('int', 'integer'):
+                value = int(raw_value)
+            elif attr_def.type_ == 'float':
+                value = float(raw_value)
+            elif attr_def.type_ == 'datetime':
+                value = string_to_datetime(raw_value)
+            elif attr_def.type_ == 'duration':
+                value = timedelta(seconds=youtube_duration_to_seconds(raw_value))
+            else:
+                raise TypeError(f"type '{attr_def.type_}' not recognised.")
+
+            setattr(self, attr_name, value)
 
     def __getattr__(self, item):
-        return self._get_or_query(*self.attribute_lookup[item])
+        if item in self.ATTRIBUTE_DEFS:
+            self._fetch(part=self.ATTRIBUTE_DEFS[item].part)
+            self._update_attributes()
+            return getattr(self, item)
+
+        raise AttributeError(f"attribute '{item}' not recognised for resource type "
+                             f"'{self.__name__}'")
 
 
 class Video(Resource):
-    resource_type = 'video'
-    resource_endpoint = 'videos'
-    attribute_lookup = {
-        'title':            ('snippet', 'title'),
-        'description':      ('snippet', 'description'),
-        'tags':             ('snippet', 'tags'),
-        'channel_id':       ('snippet', 'channelId'),
-        'channel_title':    ('snippet', 'channelTitle'),
-        'status':           ('status', 'license'),
-        'n_views':          ('statistics', 'viewCount'),
-        'n_likes':          ('statistics', 'likeCount'),
-        'n_dislikes':       ('statistics', 'dislikeCount'),
-        'n_favorites':      ('statistics', 'favoriteCount'),
-        'n_comments':       ('statistics', 'commentCount'),
+
+    ENDPOINT = 'videos'
+    ATTRIBUTE_DEFS = {
+        'title': AttributeDef('snippet', 'title'),
+        'published_at': AttributeDef('snippet', 'publishedAt', type_='datetime'),
+        'n_views': AttributeDef('statistics', 'viewCount', type_='int'),
     }
-
-    def __repr__(self):
-        if self.title:
-            return "<Video {}: {}>".format(self.id, self.title)
-        else:
-            return "<Video {}>".format(self.id)
-
-    @property
-    def published_at(self):
-        published_at = self._get_or_query('snippet', 'publishedAt')
-        return string_to_datetime(published_at)
-
-    @property
-    def duration(self):
-        duration_iso8601 = self._get_or_query('contentDetails', 'duration')
-        return timedelta(seconds=youtube_duration_to_seconds(duration_iso8601))
-
-    def __getattr__(self, item):
-        attribute = super().__getattr__(item)
-        if len(item) > 2 and item[:2] == 'n_':
-            attribute = int(attribute)
-        return attribute
-
 
 
 class Channel(Resource):
-    resource_type = 'channel'
-    resource_endpoint = 'channels'
-    attribute_lookup = {
-        'title': ('snippet', 'title'),
+
+    ENDPOINT = 'channels'
+    ATTRIBUTE_DEFS = {
+        'title': AttributeDef('snippet', 'title'),
+        'published_at': AttributeDef('snippet', 'publishedAt', type_='datetime'),
     }
-
-    @property
-    def published_at(self):
-        published_at = self._get_or_query('snippet', 'publishedAt')
-        return string_to_datetime(published_at)
-
-    def __repr__(self):
-        if self.title:
-            return "<Channel {}: {}>".format(self.id, self.title)
-        else:
-            return "<Channel {}>".format(self.id)
