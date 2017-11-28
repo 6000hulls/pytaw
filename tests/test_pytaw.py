@@ -41,6 +41,9 @@ class TestVideo:
     def test_tags(self, video):
         assert video.tags == ['jawed', 'karim', 'elephant', 'zoo', 'youtube', 'first', 'video']
 
+    def test_duration(self, video):
+        assert video.duration.total_seconds() == 19
+
 
 class TestChannel:
 

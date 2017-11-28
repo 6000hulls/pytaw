@@ -406,6 +406,9 @@ class Video(Resource):
         'channel_id': AttributeDef('snippet', 'channelId', type_='str'),
         'channel_title': AttributeDef('snippet', 'channelTitle', type_='str'),
         #
+        # contentDetails
+        'duration': AttributeDef('contentDetails', 'duration', type_='duration'),
+        #
         # status
         'status': AttributeDef('status', 'license', type_='str'),
         #
