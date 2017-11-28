@@ -23,14 +23,17 @@ def channel(youtube):
 
 class TestVideo(object):
 
-    def test_video_title(self, video):
+    def test_title(self, video):
         assert video.title == "Me at the zoo"
 
-    def test_video_published_at(self, video):
+    def test_published_at(self, video):
         assert video.published_at.isoformat() == '2005-04-24T03:31:52+00:00'
 
-    def test_video_n_views(self, video):
+    def test_n_views(self, video):
         assert video.n_views > int(40e6)
+
+    def test_tags(self, video):
+        assert video.tags == ['jawed', 'karim', 'elephant', 'zoo', 'youtube', 'first', 'video']
 
 class TestChannel(object):
 

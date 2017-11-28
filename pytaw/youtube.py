@@ -333,12 +333,16 @@ class Resource(object):
             if raw_value is None:
                 continue
 
-            if attr_def.type_ in ('str', 'string'):
+            if attr_def.type_ is None:
                 value = raw_value
+            elif attr_def.type_ in ('str', 'string'):
+                value = str(raw_value)
             elif attr_def.type_ in ('int', 'integer'):
                 value = int(raw_value)
             elif attr_def.type_ == 'float':
                 value = float(raw_value)
+            elif attr_def.type_ == 'list':
+                value = list(raw_value)
             elif attr_def.type_ == 'datetime':
                 value = string_to_datetime(raw_value)
             elif attr_def.type_ == 'duration':
@@ -377,15 +381,15 @@ class AttributeDef(object):
     and it's name (the dictionary key within the 'part'), so that it can be found in the API
     response.
 
-    The data type should also be given as a string ('string', 'int', 'datetime' etc),
-    so that we can convert it when we add the data as an attribute to the Resource instance.  The
-    default is 'string'.
+    The data type should also be given as a string ('str', 'int', 'datetime' etc), so that we can
+    convert it when we add the data as an attribute to the Resource instance.  If not given or
+    None, no type conversion is performed.
 
     """
     def __init__(self, part, name, type_=None):
         self.part = part
         self.name = name
-        self.type_ = type_ or 'string'
+        self.type_ = type_
 
 
 class Video(Resource):
@@ -393,9 +397,24 @@ class Video(Resource):
 
     ENDPOINT = 'videos'
     ATTRIBUTE_DEFS = {
-        'title': AttributeDef('snippet', 'title'),
+        #
+        # snippet
+        'title': AttributeDef('snippet', 'title', type_='str'),
+        'description': AttributeDef('snippet', 'description', type_='str'),
         'published_at': AttributeDef('snippet', 'publishedAt', type_='datetime'),
+        'tags': AttributeDef('snippet', 'tags', type_='list'),
+        'channel_id': AttributeDef('snippet', 'channelId', type_='str'),
+        'channel_title': AttributeDef('snippet', 'channelTitle', type_='str'),
+        #
+        # status
+        'status': AttributeDef('status', 'license', type_='str'),
+        #
+        # statistics
         'n_views': AttributeDef('statistics', 'viewCount', type_='int'),
+        'n_likes': AttributeDef('statistics', 'likeCount', type_='int'),
+        'n_dislikes': AttributeDef('statistics', 'dislikeCount', type_='int'),
+        'n_favorites': AttributeDef('statistics', 'favoriteCount', type_='int'),
+        'n_comments': AttributeDef('statistics', 'commentCount', type_='int'),
     }
 
 
@@ -404,6 +423,8 @@ class Channel(Resource):
 
     ENDPOINT = 'channels'
     ATTRIBUTE_DEFS = {
+        #
+        # snippet
         'title': AttributeDef('snippet', 'title'),
         'published_at': AttributeDef('snippet', 'publishedAt', type_='datetime'),
     }
