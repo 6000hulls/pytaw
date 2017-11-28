@@ -186,8 +186,8 @@ class ListResponse(object):
         self.kind = raw.get('kind').replace("youtube#", "")
         self.next_page_token = raw.get('nextPageToken')
         page_info = raw.get('pageInfo', {})
-        self.total_results = page_info.get('totalResults')
-        self.results_per_page = page_info.get('resultsPerPage')
+        self.total_results = int(page_info.get('totalResults'))
+        self.results_per_page = int(page_info.get('resultsPerPage'))
 
         # keep items on the first page in raw format
         self._first_page = raw.get('items')

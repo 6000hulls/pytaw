@@ -21,7 +21,13 @@ def channel(youtube):
     return youtube.channel(id='UCMDQxm7cUx3yXkfeHa5zJIQ')
 
 
-class TestVideo(object):
+@pytest.fixture
+def video_search(youtube):
+    """A ListResponse instance corresponding to a video search for the query 'python'"""
+    return youtube.search(search_string='python', type_='video')
+
+
+class TestVideo:
 
     def test_title(self, video):
         assert video.title == "Me at the zoo"
@@ -35,7 +41,17 @@ class TestVideo(object):
     def test_tags(self, video):
         assert video.tags == ['jawed', 'karim', 'elephant', 'zoo', 'youtube', 'first', 'video']
 
-class TestChannel(object):
 
-    def test_channel_title(self, channel):
+class TestChannel:
+
+    def test_title(self, channel):
         assert channel.title == "YouTube Help"
+
+
+class TestSearch:
+
+    def test_video_search_returns_a_video(self, video, video_search):
+        assert type(video) == type(video_search.first())
+
+    def test_video_search_has_many_results(self, video_search):
+        assert video_search.total_results > 10000
