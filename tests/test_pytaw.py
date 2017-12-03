@@ -22,9 +22,15 @@ def channel(youtube):
 
 
 @pytest.fixture
+def search(youtube):
+    """A ListResponse instance corresponding to a search for the query 'python'"""
+    return youtube.search(q='python')
+
+
+@pytest.fixture
 def video_search(youtube):
     """A ListResponse instance corresponding to a video search for the query 'python'"""
-    return youtube.search(search_string='python', type_='video')
+    return youtube.search(q='python', type_='video')
 
 
 class TestVideo:
@@ -58,3 +64,13 @@ class TestSearch:
 
     def test_video_search_has_many_results(self, video_search):
         assert video_search.total_results > 10000
+
+    def test_search_iteration(self, search):
+        c = 0
+        for v in search:
+            print(v)
+            c += 1
+            if c > 10:
+                break
+
+        assert True

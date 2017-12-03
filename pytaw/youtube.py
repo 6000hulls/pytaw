@@ -10,7 +10,6 @@ from .utils import datetime_to_string, string_to_datetime, youtube_duration_to_s
 
 logger = logging.getLogger(__name__)
 
-MAX_SEARCH_RESULTS = 1000
 CONFIG_FILE_PATH = "config.ini"
 
 
@@ -57,10 +56,10 @@ class YouTube(object):
     def __repr__(self):
         return "<YouTube object>"
 
-    def search(self, search_string=None, type_=None, per_page=None, after=None, extra_kwargs=None):
+    def search(self, q=None, type_=None, per_page=None, after=None, extra_kwargs=None):
         """Search YouTube, returning an instance of `ListResponse`.
 
-        :param search_string: search query
+        :param q: search query
         :param type_: type of resource to search (by default a search will contain many
             different resource types, including videos, channels, playlists etc.)
         :param per_page: how many results to return per request (max. 50)
@@ -73,8 +72,8 @@ class YouTube(object):
         kwargs = {
             'part': self.part,
         }
-        if search_string:
-            kwargs['q'] = search_string
+        if q:
+            kwargs['q'] = q
         if type_:
             kwargs['type'] = type_
         if per_page:
@@ -176,57 +175,76 @@ class Query(object):
 
 
 class ListResponse(object):
+    """Executes a query and turns the response into a list of Resource instances."""
+
+    MAX_RESULTS = 500
 
     def __init__(self, query):
-        # execute query to get raw api response dictionary
         self.query = query
-        raw = self.query.execute()
+        self._reset()
+
+    def __repr__(self):
+        return "<ListResponse endpoint='{}', n={}, per_page={}>".format(
+            self.query.endpoint, self.total_results, self.results_per_page
+        )
+
+    def _reset(self):
+        self.kind = None
+        self.next_page_token = None
+        self.total_results = None
+        self.results_per_page = None
+        self._listing = None
+        self._listing_index = None      # index of item within current listing
+        self._n_yielded = 0             # total no. of items yielded so far
+        self._exhausted = False
+        
+    def __iter__(self):
+        """Allow this object to act as an iterator."""
+        return self
+
+    def __next__(self):
+        if self._n_yielded > self.MAX_RESULTS:
+            raise StopIteration()
+
+        if self._listing is None or self._listing_index >= len(self._listing):
+            self._fetch_next()
+
+        item = self._listing[self._listing_index]
+        self._listing_index += 1
+        self._n_yielded += 1
+        return create_resource_from_api_response(self.query.youtube, item)
+
+    def _fetch_next(self):
+        if self._exhausted:
+            raise StopIteration()
+
+        # execute query to get raw api response dictionary
+        params = dict()
+        if self.next_page_token:
+            params['pageToken'] = self.next_page_token
+        raw = self.query.execute(kwargs=params)
 
         # store basic response info
         self.kind = raw.get('kind').replace("youtube#", "")
-        self.next_page_token = raw.get('nextPageToken')
+        self.next_page_token = raw.get('nextPageToken', None)
+        if self.next_page_token is None:
+            self._exhausted = True
+
         page_info = raw.get('pageInfo', {})
         self.total_results = int(page_info.get('totalResults'))
         self.results_per_page = int(page_info.get('resultsPerPage'))
 
         # keep items on the first page in raw format
-        self._first_page = raw.get('items')
-
-    def __repr__(self):
-        return "<ListResponse '{}': n={}, per_page={}>".format(
-            self.query.endpoint, self.total_results, self.results_per_page
-        )
+        self._listing = raw.get('items')
+        self._listing_index = 0
 
     def first(self):
-        if self._first_page:
-            return create_resource_from_api_response(self.query.youtube, self._first_page[0])
+        self._reset()
+        return self.__next__()
 
     def first_page(self):
-        if self._first_page:
-            return [create_resource_from_api_response(self.query.youtube, item)
-                    for item in self._first_page]
-
-    def all(self, limit=MAX_SEARCH_RESULTS):
-        page_items = self._first_page
-        next_page_token = self.next_page_token
-        items_yielded = 0
-        page_no = 1
-        while True:
-            if page_no > 1:
-                raw = self.query.execute({'pageToken': next_page_token})
-                page_items = raw.get('items')
-                next_page_token = raw.get('nextPageToken')
-
-            for item in page_items:
-                yield create_resource_from_api_response(item)
-                items_yielded += 1
-                if items_yielded >= limit:
-                    return
-
-            if next_page_token is None:
-                break
-
-            page_no += 1
+        self._reset()
+        return [self.__next__() for _ in range(self.results_per_page)]
 
 
 def create_resource_from_api_response(youtube, item):
@@ -244,7 +262,7 @@ def create_resource_from_api_response(youtube, item):
         elif kind == 'channel':
             return Channel(youtube, id, item)
         else:
-            NotImplementedError(f"can't deal with resource kind {kind} yet.")
+            raise NotImplementedError(f"can't deal with resource kind '{kind}'")
 
 
 class Resource(object):
@@ -355,7 +373,10 @@ class Resource(object):
     def __getattr__(self, item):
         """If an attribute hasn't been set, this function tries to fetch and add it.
 
-        But if the attribute isn't present in ATTRIBUTE_DEFS, we raise an AttributeError.
+        Note: the __getattr__ method is only ever called when an attribute can't be found,
+        therefore there is no need to check if the attribute already exists within this function.
+
+        If the attribute isn't present in ATTRIBUTE_DEFS, raise AttributeError.
 
         :param item: attribute name
         :return: attribute value
@@ -367,7 +388,7 @@ class Resource(object):
             return getattr(self, item)
 
         raise AttributeError(f"attribute '{item}' not recognised for resource type "
-                             f"'{self.__name__}'")
+                             f"'{type(self).__name__}'")
 
 
 class AttributeDef(object):
@@ -410,7 +431,7 @@ class Video(Resource):
         'duration': AttributeDef('contentDetails', 'duration', type_='duration'),
         #
         # status
-        'status': AttributeDef('status', 'license', type_='str'),
+        'license': AttributeDef('status', 'license', type_='str'),
         #
         # statistics
         'n_views': AttributeDef('statistics', 'viewCount', type_='int'),
@@ -419,6 +440,10 @@ class Video(Resource):
         'n_favorites': AttributeDef('statistics', 'favoriteCount', type_='int'),
         'n_comments': AttributeDef('statistics', 'commentCount', type_='int'),
     }
+
+    @property
+    def is_cc(self):
+        return self.license == 'creativeCommon'
 
 
 class Channel(Resource):
