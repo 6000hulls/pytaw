@@ -219,6 +219,30 @@ class ListResponse(object):
         self._n_yielded += 1
         return create_resource_from_api_response(self.youtube, item)
 
+    def __getitem__(self, index):
+        self._reset()
+        if isinstance(index, slice):
+            start = index.start or 0
+            stop = index.stop or self.MAX_RESULTS
+            step = index.step or None
+
+            if step not in (1, None):
+                raise ValueError("don't use the slice step!")
+
+            if start is not None:
+                for _ in range(start):
+                    self.__next__()
+
+            items = []
+            for _ in range(start, stop):
+                items.append(self.__next__())
+
+            return items
+        else:
+            for _ in range(index.start):
+                self.__next__()
+            return self.__next__()
+
     def _fetch_next(self):
         if self._exhausted:
             raise StopIteration()
@@ -352,9 +376,16 @@ class Resource(object):
         """
         for attr_name, attr_def in self.ATTRIBUTE_DEFS.items():
             # get the value, if it exists in the data store
-            raw_value = self._get(attr_def.part, attr_def.name)
+            if isinstance(attr_def.name, str):
+                raw_value = self._get(attr_def.part, attr_def.name)
+            else:
+                raw_value = self._get(attr_def.part, *attr_def.name)
+
             if raw_value is None:
-                continue
+                if self._data.get(attr_def.part) is not None:
+                    raw_value = ''
+                else:
+                    continue
 
             if attr_def.type_ is None:
                 value = raw_value
@@ -459,10 +490,33 @@ class Channel(Resource):
         #
         # snippet
         'title': AttributeDef('snippet', 'title'),
+        'description': AttributeDef('snippet', 'description'),
         'published_at': AttributeDef('snippet', 'publishedAt', type_='datetime'),
+        'thumbnail_url': AttributeDef('snippet', ['thumbnails', 'default', 'url'], type_='str'),
+        'country': AttributeDef('snippet', 'country', type_='str'),
         #
         # statistics
+        'n_videos': AttributeDef('statistics', 'videoCount', type_='int'),
+        'n_subscribers': AttributeDef('statistics', 'subscriberCount', type_='int'),
         'n_views': AttributeDef('statistics', 'viewCount', type_='int'),
-        'n_subs': AttributeDef('statistics', 'subscriberCount', type_='int'),
         'n_comments': AttributeDef('statistics', 'commentCount', type_='int'),
     }
+
+    def most_recent_upload(self):
+        response = self.most_recent_uploads(n=1)
+        return response[0]
+
+
+    def most_recent_uploads(self, n=50):
+        if n > 50:
+            raise ValueError(f"n must be less than 50, not {n}")
+
+        kwargs = {
+            'part': 'id',
+            'channelId': self.id,
+            'maxResults': n,
+            'order': 'date',
+            'type': 'video',
+        }
+        response = self.youtube.search(extra_kwargs=kwargs)
+        return response[:n]
