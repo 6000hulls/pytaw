@@ -1,4 +1,5 @@
 from abc import ABC, abstractmethod
+from enum import Enum
 from datetime import timedelta
 import os
 import logging
@@ -21,11 +22,10 @@ class YouTube(object):
 
     """
 
-    def __init__(self, key=None, part=None):
+    def __init__(self, key=None):
         """Initialise the YouTube class.
 
         :param key: developer api key (you need to get this from google)
-        :param part: default part string for api queries.  default: 'id,snippet,contentDetails'.
 
         """
         # developer api key may be specified at initialisation, or in a config file
@@ -39,13 +39,6 @@ class YouTube(object):
         else:
             self.key = key
 
-        # the default 'part' string to use for requests to the api.
-        # this effects how much data a query returns, as well as the quota cost of that query.
-        if part is None:
-            self.part = "id"
-        else:
-            self.part = part
-
         self.build = googleapiclient.discovery.build(
             'youtube',
             'v3',
@@ -56,93 +49,92 @@ class YouTube(object):
     def __repr__(self):
         return "<YouTube object>"
 
-    def search(self, q=None, type_=None, per_page=None, after=None, extra_kwargs=None):
+    def search(self, q=None, type_=None, before=None, after=None, api_params=None):
         """Search YouTube, returning an instance of `ListResponse`.
 
         :param q: search query
         :param type_: type of resource to search (by default a search will contain many
             different resource types, including videos, channels, playlists etc.)
-        :param per_page: how many results to return per request (max. 50)
+        :param before: limit results to resources published before this date by providing a
+            datetime instance
         :param after: limit results to resources published after this date by providing a
             datetime instance
-        :param extra_kwargs: extra keyword arguments to pass to the search function
+        :param api_params: dict of additional api parameters to pass to the search function
         :return: ListResponse object containing the requested resource instances
 
         """
-        kwargs = {
-            'part': self.part,
+        params = {
+            'part': 'id',
+            'maxResults': 50,
         }
         if q:
-            kwargs['q'] = q
+            params['q'] = q
         if type_:
-            kwargs['type'] = type_
-        if per_page:
-            if per_page > 50:
-                logger.warning("api does not allow more than 50 results per page.")
-                per_page = 50
-            kwargs['maxResults'] = per_page
+            params['type'] = type_
+        if before:
+            params['publishedBefore'] = datetime_to_string(before)
         if after:
-            kwargs['publishedAfter'] = datetime_to_string(after)
-        if extra_kwargs:
-            kwargs.update(extra_kwargs)
+            params['publishedAfter'] = datetime_to_string(after)
+        if api_params:
+            params.update(api_params)
 
-        query = Query(self, 'search', kwargs)
+        query = Query(self, 'search', params)
         return ListResponse(query)
 
-    def video(self, id, extra_kwargs=None):
+    def video(self, id, api_params=None):
         """Fetch a Video instance.
 
         :param id: youtube video id e.g. 'jNQXAC9IVRw'
-        :param extra_kwargs: extra keyword arguments to send with the query
+        :param api_params: additional api parameters to send with the query
         :return: Video instance if video is found, else None
 
         """
-        kwargs = {
-            'part': self.part,
+        params = {
+            'part': 'id',
             'id': id,
         }
-        if extra_kwargs:
-            kwargs.update(extra_kwargs)
+        if api_params:
+            params.update(api_params)
 
-        query = Query(self, 'videos', kwargs)
+        query = Query(self, 'videos', params)
         return ListResponse(query).first()
 
-    def channel(self, id, extra_kwargs=None):
+    def channel(self, id, api_params=None):
         """Fetch a Channel instance.
 
         :param id: youtube channel id e.g. 'UCMDQxm7cUx3yXkfeHa5zJIQ'
-        :param extra_kwargs: extra keyword arguments to send with the query
+        :param api_params: extra keyword arguments to send with the query
         :return: Channel instance if channel is found, else None
 
         """
-        kwargs = {
-            'part': self.part,
+        params = {
+            'part': 'id',
             'id': id,
         }
-        if extra_kwargs:
-            kwargs.update(extra_kwargs)
+        if api_params:
+            params.update(api_params)
 
-        query = Query(self, 'channels', kwargs)
+        query = Query(self, 'channels', params)
         return ListResponse(query).first()
 
 
 class Query(object):
     """Everything we need to execute a query and retrieve the raw response dictionary."""
 
-    def __init__(self, youtube, endpoint, kwargs=None):
+    def __init__(self, youtube, endpoint, api_params=None):
         """Initialise the query.
 
         :param youtube: YouTube instance
-        :param endpoint: string giving the endpoing to query, e.g. 'videos', 'search'...
-        :param kwargs: keyword arguments to send with the query
+        :param endpoint: string giving the api endpoint to query, e.g. 'videos', 'search'...
+        :param api_params: dict of keyword parameters to send (directly) to the api
 
         """
         self.youtube = youtube
         self.endpoint = endpoint
-        self.kwargs = kwargs or dict()
+        self.api_params = api_params or dict()
 
-        if not 'part' in kwargs:
-            kwargs['part'] = self.youtube.part
+        if not 'part' in api_params:
+            api_params['part'] = 'id'
 
         endpoint_func_mapping = {
             'search': self.youtube.build.search().list,
@@ -156,22 +148,23 @@ class Query(object):
             raise ValueError(f"youtube api endpoint '{self.endpoint}' not recognised.")
 
     def __repr__(self):
-        return "<Query '{}' kwargs={}>".format(self.endpoint, self.kwargs)
+        return "<Query '{}' api_params={}>".format(self.endpoint, self.api_params)
 
-    def execute(self, kwargs=None):
+    def execute(self, api_params=None):
         """Execute the query.
 
-        :param kwargs: extra keyword arguments to send with the query.
+        :param api_params: extra api parameters to send with the query.
         :return: api response dictionary
 
         """
-        if kwargs is not None:
-            query_kwargs = self.kwargs.copy()
-            query_kwargs.update(kwargs)
+        if api_params is not None:
+            # update only for this query execution
+            query_params = self.api_params.copy()
+            query_params.update(api_params)
         else:
-            query_kwargs = self.kwargs
+            query_params = self.api_params
 
-        return self.query_func(**query_kwargs).execute()
+        return self.query_func(**query_params).execute()
 
 
 class ListResponse(object):
@@ -190,11 +183,12 @@ class ListResponse(object):
         self._reset()
 
     def _reset(self):
-        self._next_page_token = None
-        self._listing = None
-        self._listing_index = None      # index of item within current listing
-        self._n_yielded = 0             # total no. of items yielded so far
-        self._exhausted = False
+        self._listing = None            # internal storage for current page listing
+        self._list_index = None         # index of item within current listing
+        self._exhausted = False         # flagged when we reach the end of the available results
+        self._page_counter = 0          # no. of pages processed
+        self._item_counter = 0          # total no. of items yielded
+        self._next_page_token = None    # api page token required for the next page of results
 
     def __repr__(self):
         return "<ListResponse endpoint='{}', n={}, per_page={}>".format(
@@ -206,19 +200,21 @@ class ListResponse(object):
         return self
 
     def __next__(self):
-        if self._n_yielded > self.MAX_RESULTS:
+        if self._item_counter > self.MAX_RESULTS:
+            logger.warning(f"ListResponse results limit reached.  if you really need more than "
+                           f"{self.MAX_RESULTS} then increase self.MAX_RESULTS.")
             raise StopIteration()
 
-        if self._listing is None or self._listing_index >= len(self._listing):
+        if self._listing is None or self._list_index >= len(self._listing):
             self._fetch_next()
 
         try:
-            item = self._listing[self._listing_index]
+            item = self._listing[self._list_index]
         except IndexError:
             raise StopIteration()
 
-        self._listing_index += 1
-        self._n_yielded += 1
+        self._list_index += 1
+        self._item_counter += 1
         return create_resource_from_api_response(self.youtube, item)
 
     def __getitem__(self, index):
@@ -253,7 +249,7 @@ class ListResponse(object):
         params = dict()
         if self._next_page_token:
             params['pageToken'] = self._next_page_token
-        raw = self.query.execute(kwargs=params)
+        raw = self.query.execute(api_params=params)
 
         # store basic response info
         self.kind = raw.get('kind').replace("youtube#", "")
@@ -265,9 +261,9 @@ class ListResponse(object):
         self.total_results = int(page_info.get('totalResults'))
         self.results_per_page = int(page_info.get('resultsPerPage'))
 
-        # keep items on the first page in raw format
+        # add items on this page in raw format
         self._listing = raw.get('items')
-        self._listing_index = 0
+        self._list_index = 0
 
     def first(self):
         self._reset()
@@ -363,7 +359,7 @@ class Resource(object):
         response = Query(
             youtube=self.youtube,
             endpoint=self.ENDPOINT,
-            kwargs={'part': part_string, 'id': self.id}
+            api_params={'part': part_string, 'id': self.id}
         ).execute()
 
         # get the first resource item and update the internal data storage
@@ -510,7 +506,6 @@ class Channel(Resource):
         response = self.most_recent_uploads(n=1)
         return response[0]
 
-
     def most_recent_uploads(self, n=50):
         if n > 50:
             raise ValueError(f"n must be less than 50, not {n}")
@@ -522,7 +517,7 @@ class Channel(Resource):
             'order': 'date',
             'type': 'video',
         }
-        response = self.youtube.search(extra_kwargs=kwargs)
+        response = self.youtube.search(api_params=kwargs)
         return response[:n]
 
 
