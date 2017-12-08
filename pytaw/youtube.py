@@ -78,7 +78,7 @@ class YouTube(object):
             kwargs['type'] = type_
         if per_page:
             if per_page > 50:
-                logger.warning("cannot fetch more than 50 results per page.")
+                logger.warning("api does not allow more than 50 results per page.")
                 per_page = 50
             kwargs['maxResults'] = per_page
         if after:
@@ -177,16 +177,12 @@ class Query(object):
 class ListResponse(object):
     """Executes a query and turns the response into a list of Resource instances."""
 
-    MAX_RESULTS = 500
+    MAX_RESULTS = 100000
 
     def __init__(self, query):
+        self.youtube = query.youtube
         self.query = query
         self._reset()
-
-    def __repr__(self):
-        return "<ListResponse endpoint='{}', n={}, per_page={}>".format(
-            self.query.endpoint, self.total_results, self.results_per_page
-        )
 
     def _reset(self):
         self.kind = None
@@ -197,6 +193,11 @@ class ListResponse(object):
         self._listing_index = None      # index of item within current listing
         self._n_yielded = 0             # total no. of items yielded so far
         self._exhausted = False
+
+    def __repr__(self):
+        return "<ListResponse endpoint='{}', n={}, per_page={}>".format(
+            self.query.endpoint, self.total_results, self.results_per_page
+        )
         
     def __iter__(self):
         """Allow this object to act as an iterator."""
@@ -209,10 +210,14 @@ class ListResponse(object):
         if self._listing is None or self._listing_index >= len(self._listing):
             self._fetch_next()
 
-        item = self._listing[self._listing_index]
+        try:
+            item = self._listing[self._listing_index]
+        except IndexError:
+            raise StopIteration()
+
         self._listing_index += 1
         self._n_yielded += 1
-        return create_resource_from_api_response(self.query.youtube, item)
+        return create_resource_from_api_response(self.youtube, item)
 
     def _fetch_next(self):
         if self._exhausted:
@@ -455,4 +460,9 @@ class Channel(Resource):
         # snippet
         'title': AttributeDef('snippet', 'title'),
         'published_at': AttributeDef('snippet', 'publishedAt', type_='datetime'),
+        #
+        # statistics
+        'n_views': AttributeDef('statistics', 'viewCount', type_='int'),
+        'n_subs': AttributeDef('statistics', 'subscriberCount', type_='int'),
+        'n_comments': AttributeDef('statistics', 'commentCount', type_='int'),
     }
