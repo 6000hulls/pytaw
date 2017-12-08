@@ -182,13 +182,15 @@ class ListResponse(object):
     def __init__(self, query):
         self.youtube = query.youtube
         self.query = query
+
+        self.kind = None
+        self.total_results = None
+        self.results_per_page = None
+
         self._reset()
 
     def _reset(self):
-        self.kind = None
-        self.next_page_token = None
-        self.total_results = None
-        self.results_per_page = None
+        self._next_page_token = None
         self._listing = None
         self._listing_index = None      # index of item within current listing
         self._n_yielded = 0             # total no. of items yielded so far
@@ -249,14 +251,14 @@ class ListResponse(object):
 
         # execute query to get raw api response dictionary
         params = dict()
-        if self.next_page_token:
-            params['pageToken'] = self.next_page_token
+        if self._next_page_token:
+            params['pageToken'] = self._next_page_token
         raw = self.query.execute(kwargs=params)
 
         # store basic response info
         self.kind = raw.get('kind').replace("youtube#", "")
-        self.next_page_token = raw.get('nextPageToken', None)
-        if self.next_page_token is None:
+        self._next_page_token = raw.get('nextPageToken', None)
+        if self._next_page_token is None:
             self._exhausted = True
 
         page_info = raw.get('pageInfo', {})
@@ -290,6 +292,8 @@ def create_resource_from_api_response(youtube, item):
             return Video(youtube, id, item)
         elif kind == 'channel':
             return Channel(youtube, id, item)
+        elif kind == 'playlist':
+            return Playlist(youtube, id, item)
         else:
             raise NotImplementedError(f"can't deal with resource kind '{kind}'")
 
@@ -520,3 +524,16 @@ class Channel(Resource):
         }
         response = self.youtube.search(extra_kwargs=kwargs)
         return response[:n]
+
+
+class Playlist(Resource):
+    """A single YouTube playlist."""
+
+    ENDPOINT = 'playlists'
+    ATTRIBUTE_DEFS = {
+        #
+        # snippet
+        'title': AttributeDef('snippet', 'title'),
+        'description': AttributeDef('snippet', 'description'),
+        'published_at': AttributeDef('snippet', 'publishedAt', type_='datetime'),
+    }

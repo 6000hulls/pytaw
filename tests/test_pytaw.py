@@ -63,6 +63,7 @@ class TestSearch:
         assert type(video) == type(video_search.first())
 
     def test_video_search_has_many_results(self, video_search):
+        video_search.first()    # make unlazy
         assert video_search.total_results > 10000
 
     def test_search_iteration(self, search):
