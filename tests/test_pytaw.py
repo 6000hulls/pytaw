@@ -5,7 +5,7 @@ import collections
 from datetime import datetime, timedelta
 
 from pytaw import YouTube
-from pytaw.youtube import Resource
+from pytaw.youtube import Resource, Video
 
 
 logging.basicConfig(stream=sys.stdout)      # show log output when run with pytest -s
@@ -103,25 +103,21 @@ class TestChannel:
         assert channel.title == "YouTube Help"
 
 
-@pytest.mark.skip(reason="still working on exactly how ListResponse is going to work")
 class TestSearch:
 
-    def test_video_search_returns_a_video(self, video, video_search):
-        assert type(video) == type(video_search[0])
+    def test_video_search_returns_a_video(self, video_search):
+        assert isinstance(video_search[0], Video)
 
     def test_video_search_has_many_results(self, video_search):
-        video_search.first()    # make unlazy
+        # make video_search unlazy (populate pageInfo attributes)
+        video = video_search[0]
+
         assert video_search.total_results > 10000
 
     def test_search_iteration(self, search):
-        c = 0
-        for v in search:
-            print(v)
-            c += 1
-            if c > 10:
-                break
-
-        assert True
+        """Simply iterate over a search, creating all resources, to check for exceptions."""
+        for resource in search:
+            log.debug(resource)
 
 
 class TestListResponse:

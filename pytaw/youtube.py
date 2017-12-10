@@ -213,7 +213,13 @@ class ListResponse(collections.Iterator):
         return self
 
     def __next__(self):
-        """Get the next item """
+        """Get the next resource.
+
+        This method allows the list reponse to be iterated over.  First we fetch a page of search
+        results, load the response into memory and and return each resource in turn.  If we're at
+        the end of a page we fetch a new one, replacing the old page in memory.
+
+        """
         # fetch the next page of items if we haven't fetched the first page yet, or alternatively
         #  if we've run out of results on this page.  this check relies on results_per_page being
         #  set if _listing is not None (which of course it should be).
@@ -237,6 +243,20 @@ class ListResponse(collections.Iterator):
         return create_resource_from_api_response(self.youtube, item)
 
     def __getitem__(self, index):
+        """Get a specific resource or list of resources.
+
+        This method handles indexing by integer or slice, e.g.:
+            listresponse[n]     returns the nth Resource instance
+            listresponse[:n]    returns the first n Resources as a list
+
+        We do this by just repeatedly calling the __next__() method until we have the items we're
+        looking for, which is a pretty dumb way of doing it but it'll do for now.
+
+        Before finding an item or items, we call _reset() so that if this response has been used
+        as an iterator we go back and start again.  After the requested item or items have been
+        found we _reset() again so that the response can still be iterated over.
+
+        """
         if isinstance(index, int):
             # if an integer is used we just return a single item.  we'll just __next__()
             # along until we're there.  this is a bit silly because we're creating a resource for
@@ -306,6 +326,7 @@ class ListResponse(collections.Iterator):
             raise KeyError(f"you can't index a ListResponse with '{index}'")
 
     def _fetch_next(self):
+        """Fetch the next page of the API response and load into memory."""
         if self._no_more_pages:
             # we should only get here if results stop at a page boundary
             log.debug(f"exhausted all results at item {self._item_count} at page boundary "
@@ -343,23 +364,24 @@ class ListResponse(collections.Iterator):
 
 
 def create_resource_from_api_response(youtube, item):
-        kind = item['kind'].replace('youtube#', '')
+    """Given a raw item from an API response, return the appropriate Resource instance."""
+    kind = item['kind'].replace('youtube#', '')
 
-        if kind == 'searchResult':
-            kind = item['id']['kind'].replace('youtube#', '')
-            id_label = kind + 'Id'
-            id = item['id'][id_label]
-        else:
-            id = item['id']
+    if kind == 'searchResult':
+        kind = item['id']['kind'].replace('youtube#', '')
+        id_label = kind + 'Id'
+        id = item['id'][id_label]
+    else:
+        id = item['id']
 
-        if kind == 'video':
-            return Video(youtube, id, item)
-        elif kind == 'channel':
-            return Channel(youtube, id, item)
-        elif kind == 'playlist':
-            return Playlist(youtube, id, item)
-        else:
-            raise NotImplementedError(f"can't deal with resource kind '{kind}'")
+    if kind == 'video':
+        return Video(youtube, id, item)
+    elif kind == 'channel':
+        return Channel(youtube, id, item)
+    elif kind == 'playlist':
+        return Playlist(youtube, id, item)
+    else:
+        raise NotImplementedError(f"can't deal with resource kind '{kind}'")
 
 
 class Resource(object):
