@@ -1,6 +1,16 @@
 import pytest
+import logging
+import sys
+import collections
+from datetime import datetime, timedelta
 
 from pytaw import YouTube
+from pytaw.youtube import Resource
+
+
+logging.basicConfig(stream=sys.stdout)      # show log output when run with pytest -s
+log = logging.getLogger(__name__)
+log.setLevel(logging.INFO)
 
 
 @pytest.fixture
@@ -33,6 +43,42 @@ def video_search(youtube):
     return youtube.search(q='python', type_='video')
 
 
+@pytest.fixture
+def video_search_array(youtube):
+    """An array of video searches with a wide range of results (zero to millions)."""
+    one_minute_ago = datetime.utcnow() - timedelta(minutes=1)
+    five_minutes_ago = datetime.utcnow() - timedelta(minutes=5)
+    return [
+        #
+        # no results
+        youtube.search(q='minecraft', type_='video', before=datetime(2000, 1, 1)),
+        #
+        # less than 100 results
+        youtube.search(q='minecraft', type_='video', before=datetime(2005, 7, 1)),
+        #
+        # over 100 results
+        youtube.search(q='minecraft', type_='video', before=datetime(2006, 1, 1)),
+        #
+        # variable number of results (hundreds or thousands...?)
+        youtube.search(q='minecraft', type_='video', after=one_minute_ago),
+        youtube.search(q='minecraft', type_='video', after=five_minutes_ago),
+        #
+        # over a million results
+        youtube.search(q='minecraft', type_='video'),
+        youtube.search(q='minecraft'),
+    ]
+
+
+class TestResource:
+
+    def test_equality(self, search):
+        a = search[0]
+        b = search[0]
+        c = search[1]
+        assert a == b
+        assert a != c
+
+
 class TestVideo:
 
     def test_title(self, video):
@@ -57,10 +103,11 @@ class TestChannel:
         assert channel.title == "YouTube Help"
 
 
+@pytest.mark.skip(reason="still working on exactly how ListResponse is going to work")
 class TestSearch:
 
     def test_video_search_returns_a_video(self, video, video_search):
-        assert type(video) == type(video_search.first())
+        assert type(video) == type(video_search[0])
 
     def test_video_search_has_many_results(self, video_search):
         video_search.first()    # make unlazy
@@ -75,3 +122,30 @@ class TestSearch:
                 break
 
         assert True
+
+
+class TestListResponse:
+
+    def test_if_iterable(self, search):
+        assert isinstance(search, collections.Iterator)
+
+    def test_integer_indexing(self, search):
+        assert isinstance(search[0], Resource)
+
+    def test_slice_indexing(self, search):
+        assert isinstance(search[1:3], list)
+
+    def test_full_listing_iteration(self, video_search_array):
+        """Iterate over all search results to check no exceptions are raised when paging etc.
+
+        Even if millions of results are found, the API will never return more than 500 (by
+        design), so we're okay to just bang right through the search results generator for the
+        whole array of video searches.
+
+        """
+        for i, search in enumerate(video_search_array):
+            c = 0
+            for _ in search:
+                c += 1
+
+            log.debug(f"checked first {c} results (search #{i})")

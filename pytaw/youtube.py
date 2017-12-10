@@ -1,15 +1,16 @@
-from abc import ABC, abstractmethod
-from enum import Enum
 from datetime import timedelta
 import os
 import logging
 import configparser
+import collections
+import itertools
 import googleapiclient.discovery
 
 from .utils import datetime_to_string, string_to_datetime, youtube_duration_to_seconds
 
 
-logger = logging.getLogger(__name__)
+log = logging.getLogger(__name__)
+log.setLevel(logging.INFO)
 
 CONFIG_FILE_PATH = "config.ini"
 
@@ -97,7 +98,7 @@ class YouTube(object):
             params.update(api_params)
 
         query = Query(self, 'videos', params)
-        return ListResponse(query).first()
+        return ListResponse(query)[0]
 
     def channel(self, id, api_params=None):
         """Fetch a Channel instance.
@@ -115,7 +116,7 @@ class YouTube(object):
             params.update(api_params)
 
         query = Query(self, 'channels', params)
-        return ListResponse(query).first()
+        return ListResponse(query)[0]
 
 
 class Query(object):
@@ -133,7 +134,7 @@ class Query(object):
         self.endpoint = endpoint
         self.api_params = api_params or dict()
 
-        if not 'part' in api_params:
+        if 'part' not in api_params:
             api_params['part'] = 'id'
 
         endpoint_func_mapping = {
@@ -167,11 +168,23 @@ class Query(object):
         return self.query_func(**query_params).execute()
 
 
-class ListResponse(object):
-    """Executes a query and turns the response into a list of Resource instances."""
+class ListResponse(collections.Iterator):
+    """Executes a query and creates a data structure containing Resource instances.
 
-    MAX_RESULTS = 100000
+    When iterated over, this object behaves like an iterator, paging through the results and
+    creating Resource instances (Video, Channel, Playlist...) as they are required.
 
+    When indexed with an integer n, returns the nth Resource.
+
+    When sliced, returns a list of Resource instances.
+
+    Due to limitations in the API, you'll never get more than ~500 from a search result -
+    definitely for the 'search' endoint and probably others as well. Also, the value given in
+    pageInfo.totalResults for how many results are returned is pretty worthless.  It may be an
+    estimate of total numbers of results _before filtering_, and it'll never be more than a
+    million.  See this issue for more details: https://issuetracker.google.com/issues/35171641
+
+    """
     def __init__(self, query):
         self.youtube = query.youtube
         self.query = query
@@ -185,93 +198,148 @@ class ListResponse(object):
     def _reset(self):
         self._listing = None            # internal storage for current page listing
         self._list_index = None         # index of item within current listing
-        self._exhausted = False         # flagged when we reach the end of the available results
-        self._page_counter = 0          # no. of pages processed
-        self._item_counter = 0          # total no. of items yielded
+        self._no_more_pages = False     # flagged when we reach the end of the available results
+        self._page_count = 0            # no. of pages processed
+        self._item_count = 0            # total no. of items yielded
         self._next_page_token = None    # api page token required for the next page of results
 
     def __repr__(self):
         return "<ListResponse endpoint='{}', n={}, per_page={}>".format(
             self.query.endpoint, self.total_results, self.results_per_page
         )
-        
+
     def __iter__(self):
         """Allow this object to act as an iterator."""
         return self
 
     def __next__(self):
-        if self._item_counter > self.MAX_RESULTS:
-            logger.warning(f"ListResponse results limit reached.  if you really need more than "
-                           f"{self.MAX_RESULTS} then increase self.MAX_RESULTS.")
-            raise StopIteration()
-
-        if self._listing is None or self._list_index >= len(self._listing):
+        """Get the next item """
+        # fetch the next page of items if we haven't fetched the first page yet, or alternatively
+        #  if we've run out of results on this page.  this check relies on results_per_page being
+        #  set if _listing is not None (which of course it should be).
+        if self._listing is None or self._list_index >= self.results_per_page:
             self._fetch_next()
 
+        # get the next item.  if this fails now we must be out of results.
+        # note: often you'll still get a next page token, even if the results end on this page,
+        # meaning the _no_more_pages flag will not be set.
+        # in this case, the items list on the _next_ page should be empty, but we don't check this.
         try:
             item = self._listing[self._list_index]
         except IndexError:
+            log.debug(f"exhausted all results at item {self._item_count} "
+                      f"(item {self._list_index + 1} on page {self._page_count})")
+            self._no_more_pages = True      # unnecessary but true
             raise StopIteration()
 
         self._list_index += 1
-        self._item_counter += 1
+        self._item_count += 1
         return create_resource_from_api_response(self.youtube, item)
 
     def __getitem__(self, index):
-        self._reset()
-        if isinstance(index, slice):
-            start = index.start or 0
-            stop = index.stop or self.MAX_RESULTS
-            step = index.step or None
+        if isinstance(index, int):
+            # if an integer is used we just return a single item.  we'll just __next__()
+            # along until we're there.  this is a bit silly because we're creating a resource for
+            #  each call and only returning the final one, but it'll do for now.
+            self._reset()
+            try:
+                for _ in range(index):
+                    self.__next__()
+            except StopIteration:
+                raise IndexError("list index out of range")
+
+            # store item to be returned
+            item = self.__next__()
+
+            # reset so that this object can still be used as a generator
+            self._reset()
+
+            return item
+
+        elif isinstance(index, slice):
+            # if a slice is used we want to return a list (not a generator).  we'll use
+            # __next__() to build up the list.
+            start = 0 if index.start is None else index.start
+            stop = index.stop
+            step = index.step
 
             if step not in (1, None):
-                raise ValueError("don't use the slice step!")
+                raise NotImplementedError("can't use a slice step other than one")
 
-            if start is not None:
-                for _ in range(start):
-                    self.__next__()
+            if start < 0 or (stop is not None and stop < 0):
+                raise NotImplementedError("can't use negative numbers in slices")
+
+            # ok if all that worked let's reset so that __next__() gives the first item in the
+            # list response
+            self._reset()
+
+            if start > 0:
+                # move to start position
+                try:
+                    for _ in range(start):
+                        self.__next__()
+                except StopIteration:
+                    # if the slice start is greater than the total length you usually get an empty
+                    # list
+                    return []
+
+            if stop is not None:
+                # iterate over the range provided by the slice
+                range_ = range(start, stop)
+            else:
+                # make the for loop iterate until StopIteration is raised
+                range_ = itertools.count()
 
             items = []
-            for _ in range(start, stop):
-                items.append(self.__next__())
+            for _ in range_:
+                try:
+                    items.append(self.__next__())
+                except StopIteration:
+                    # if the slice end is greater than the total length you usually get a
+                    # truncated list
+                    break
 
+            self._reset()
             return items
+
         else:
-            for _ in range(index.start):
-                self.__next__()
-            return self.__next__()
+            raise KeyError(f"you can't index a ListResponse with '{index}'")
 
     def _fetch_next(self):
-        if self._exhausted:
+        if self._no_more_pages:
+            # we should only get here if results stop at a page boundary
+            log.debug(f"exhausted all results at item {self._item_count} at page boundary "
+                      f"(item {self._list_index + 1} on page {self._page_count})")
             raise StopIteration()
 
-        # execute query to get raw api response dictionary
+        # pass the next page token if this is not the first page we're fetching
         params = dict()
         if self._next_page_token:
             params['pageToken'] = self._next_page_token
+
+        # execute query to get raw response dictionary
         raw = self.query.execute(api_params=params)
 
-        # store basic response info
-        self.kind = raw.get('kind').replace("youtube#", "")
+        # the following data shouldn't change, so store only if it's not been set yet
+        # (i.e. this is the first fetch)
+        if None in (self.kind, self.total_results, self.results_per_page):
+            # don't use get() because if this data doesn't exist in the api response something
+            # has gone wrong and we'd like an exception
+            self.kind = raw['kind'].replace('youtube#', '')
+            self.total_results = int(raw['pageInfo']['totalResults'])
+            self.results_per_page = int(raw['pageInfo']['resultsPerPage'])
+
+        # whereever we are in the list response we need the next page token.  if it's not there,
+        # set a flag so that we know there's no more to be fetched (note _next_page_token is also
+        #  None at initialisation so we can't check it that way).
         self._next_page_token = raw.get('nextPageToken', None)
         if self._next_page_token is None:
-            self._exhausted = True
+            self._no_more_pages = True
 
-        page_info = raw.get('pageInfo', {})
-        self.total_results = int(page_info.get('totalResults'))
-        self.results_per_page = int(page_info.get('resultsPerPage'))
-
-        # add items on this page in raw format
-        self._listing = raw.get('items')
+        # store items in raw format for processing by __next__()
+        self._listing = raw['items']    # would like a KeyError if this fails (it shouldn't)
         self._list_index = 0
-
-    def first(self):
-        self._reset()
-        return self.__next__()
-
-    def first_page(self):
-        self._reset()
-        return [self.__next__() for _ in range(self.results_per_page)]
+        self._page_count += 1
 
 
 def create_resource_from_api_response(youtube, item):
@@ -323,6 +391,17 @@ class Resource(object):
         # update attributes with whatever we've been given as data
         self._update_attributes()
 
+    def __eq__(self, other):
+        if isinstance(self, other.__class__):
+            return self.__dict__ == other.__dict__
+
+        # if they're different classes return NotImplemented instead of False so that we fallback
+        #  to the default comparison method
+        return NotImplemented
+
+    def __hash__(self):
+        return hash(tuple(sorted(self.__dict__.items())))
+
     def _get(self, *keys):
         """Get a data attribute from the stored item response, if it exists.
 
@@ -365,7 +444,6 @@ class Resource(object):
         # get the first resource item and update the internal data storage
         item = response['items'][0]
         self._data.update(item)
-
 
     def _update_attributes(self):
         """Take internally stored raw data and creates attributes with right types etc.
