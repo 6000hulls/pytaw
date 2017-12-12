@@ -11,7 +11,7 @@ from .utils import datetime_to_string, string_to_datetime, youtube_duration_to_s
 
 
 log = logging.getLogger(__name__)
-log.setLevel(logging.DEBUG)
+log.setLevel(logging.INFO)
 
 CONFIG_FILE_PATH = "config.ini"
 
@@ -66,7 +66,7 @@ class YouTube(object):
 
         """
         params = {
-            'part': 'id,snippet',
+            'part': 'id',
             'maxResults': 50,
         }
         if q:
