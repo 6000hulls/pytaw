@@ -4,13 +4,14 @@ import logging
 import configparser
 import collections
 import itertools
+from pprint import pprint
 import googleapiclient.discovery
 
 from .utils import datetime_to_string, string_to_datetime, youtube_duration_to_seconds
 
 
 log = logging.getLogger(__name__)
-log.setLevel(logging.INFO)
+log.setLevel(logging.DEBUG)
 
 CONFIG_FILE_PATH = "config.ini"
 
@@ -65,7 +66,7 @@ class YouTube(object):
 
         """
         params = {
-            'part': 'id',
+            'part': 'id,snippet',
             'maxResults': 50,
         }
         if q:
@@ -165,6 +166,8 @@ class Query(object):
         else:
             query_params = self.api_params
 
+        log.debug("executing query with the following parameters:")
+        log.debug(pprint(query_params))
         return self.query_func(**query_params).execute()
 
 
