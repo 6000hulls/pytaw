@@ -6,6 +6,7 @@ import configparser
 import collections
 import itertools
 from pprint import pprint, pformat
+from abc import ABC, abstractmethod
 import googleapiclient.discovery
 
 from .utils import datetime_to_string, string_to_datetime, youtube_duration_to_seconds
@@ -400,11 +401,18 @@ def create_resource_from_api_response(youtube, item):
         raise NotImplementedError(f"can't deal with resource kind '{kind}'")
 
 
-class Resource(object):
+class Resource(ABC):
     """Base class for YouTube resource classes, e.g. Video, Channel etc."""
 
-    ENDPOINT = ''
-    ATTRIBUTE_DEFS = {}
+    @property
+    @abstractmethod
+    def ENDPOINT(self):
+        pass
+
+    @property
+    @abstractmethod
+    def ATTRIBUTE_DEFS(self):
+        pass
 
     def __init__(self, youtube, id, data=None):
         """Initialise a Resource object.
@@ -457,6 +465,17 @@ class Resource(object):
 
     def __hash__(self):
         return hash(tuple(sorted(self.__dict__.items())))
+
+    def __repr__(self):
+        n_chars = 16
+        if len(self.title) > n_chars:
+            short_title = self.title[:(n_chars - 3)] + '...'
+        else:
+            short_title = self.title
+        return f"<{type(self).__name__} {self.id} \"{short_title}\">"
+
+    def __str__(self):
+        return self.title
 
     def _update_attributes(self):
         """Take internally stored raw data and creates attributes with right types etc.
@@ -665,6 +684,10 @@ class Video(Resource):
     @property
     def is_cc(self):
         return self.license == 'creativeCommon'
+
+    @property
+    def channel(self):
+        return self.youtube.channel(id=self.channel_id)
 
 
 class Channel(Resource):
