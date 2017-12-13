@@ -1,19 +1,23 @@
 from datetime import timedelta
 import os
+import time
 import logging
 import configparser
 import collections
 import itertools
-from pprint import pprint
+from pprint import pprint, pformat
 import googleapiclient.discovery
 
 from .utils import datetime_to_string, string_to_datetime, youtube_duration_to_seconds
 
 
 log = logging.getLogger(__name__)
-log.setLevel(logging.INFO)
+log.setLevel(logging.DEBUG)
 
-CONFIG_FILE_PATH = "config.ini"
+
+class DataMissing(Exception):
+    """Exception raised if data is not found in a Resource data store."""
+    pass
 
 
 class YouTube(object):
@@ -32,9 +36,10 @@ class YouTube(object):
         """
         # developer api key may be specified at initialisation, or in a config file
         if key is None:
-            if os.path.exists(CONFIG_FILE_PATH):
+            config_file_path = os.path.join(os.path.expanduser('~'), ".pytaw.conf")
+            if os.path.exists(config_file_path):
                 config = configparser.ConfigParser()
-                config.read(CONFIG_FILE_PATH)
+                config.read(config_file_path)
                 self.key = config['youtube']['developer_key']
             else:
                 raise ValueError("api key not provided.")
@@ -65,8 +70,9 @@ class YouTube(object):
         :return: ListResponse object containing the requested resource instances
 
         """
+
         params = {
-            'part': 'id',
+            'part': 'id,snippet',
             'maxResults': 50,
         }
         if q:
@@ -166,8 +172,7 @@ class Query(object):
         else:
             query_params = self.api_params
 
-        log.debug("executing query with the following parameters:")
-        log.debug(pprint(query_params))
+        log.debug(f"executing query with {str(query_params)}")
         return self.query_func(**query_params).execute()
 
 
@@ -368,8 +373,10 @@ class ListResponse(collections.Iterator):
 
 def create_resource_from_api_response(youtube, item):
     """Given a raw item from an API response, return the appropriate Resource instance."""
-    kind = item['kind'].replace('youtube#', '')
 
+    # extract kind and id for the item.  if it's a search result then we have to do a bit of
+    # wrangling. but we only extract the data - don't alter anything in the api response item!
+    kind = item['kind'].replace('youtube#', '')
     if kind == 'searchResult':
         kind = item['id']['kind'].replace('youtube#', '')
         id_label = kind + 'Id'
@@ -406,12 +413,30 @@ class Resource(object):
         # every resource has a unique id, it may be a different format for each resource type though
         self.id = id
 
-        # this is the api response item for the resource.  it's a dictionary with 'kind',
+        # data is the api response item for the resource.  it's a dictionary with 'kind',
         # 'etag' and 'id' keys, at least.  it may also have a 'snippet', 'contentDetails' etc.
-        # containing more detailed info.  in theory, this dictionary could be accessed directly,
+        # containing more detailed info.  this dictionary could be accessed directly,
         # but we'll make the data accessible via class attributes where possible so that we can
         # do type conversion etc.
-        self._data = data or {}
+        #
+        # if the data is from a search result we need to handle it differently.  search results
+        # have some useful basic data and we'd like to use that if possible to prevent another
+        # api request.  however, we'll need to know later if all we have is a search result (in
+        # which case a lot of stuff will be missing) or a genuine resource api request.
+        if data:
+            if 'kind' in data and 'searchResult' in data['kind']:
+                self._search_data = data
+                self._data = {}
+            else:
+                self._search_data = {}
+                self._data = data
+        else:
+            self._search_data = {}
+            self._data = {}
+
+        # this dictionary will log which attributes we've tried to fetch so that we don't get
+        # stuck in an infinite loop if something goes badly wrong
+        self._tried_to_fetch = {}
 
         # update attributes with whatever we've been given as data
         self._update_attributes()
@@ -427,12 +452,72 @@ class Resource(object):
     def __hash__(self):
         return hash(tuple(sorted(self.__dict__.items())))
 
+    def _update_attributes(self):
+        """Take internally stored raw data and creates attributes with right types etc.
+
+        Attributes defined in ATTRIBUTE_DEFS will be added as attributes, if they exist in
+        internal data storage.
+
+        """
+        for attr_name, attr_def in self.ATTRIBUTE_DEFS.items():
+            type_ = attr_def.type_
+            part = attr_def.part
+            if isinstance(attr_def.name, str):
+                # may be a string or list - we want a list
+                keys = [attr_def.name, ]
+            else:
+                keys = attr_def.name
+
+            try:
+                raw_value = self._get(part, *keys)
+            except DataMissing:
+                # if data is missing it basically means one of three things: we've not tried to
+                # fetch it yet, we fetched the right part but it was null and not returned with
+                # the query, or something is badly wrong (e.g. a bad AttributeDef).
+                #
+                # we check for the second case by looking in the data store to see if the part is
+                #  there.  if it is, we set the attribute to show we've fetched and there was
+                # nothing there.
+                #
+                # in the other two cases, just don't set this attribute right now.
+                if self._data.get(part) is not None:
+                    if type_ in ('str', 'string'):
+                        raw_value = ''
+                    elif type_ in ('int', 'integer', 'float'):
+                        raw_value = 0
+                    elif type_ == 'list':
+                        raw_value = []
+                    else:
+                        raw_value = None
+                else:
+                    continue
+
+            if type_ is None:
+                value = raw_value
+            elif type_ in ('str', 'string'):
+                value = str(raw_value)
+            elif type_ in ('int', 'integer'):
+                value = int(raw_value)
+            elif type_ == 'float':
+                value = float(raw_value)
+            elif type_ == 'list':
+                value = list(raw_value)
+            elif type_ == 'datetime':
+                value = string_to_datetime(raw_value)
+            elif type_ == 'timedelta':
+                value = timedelta(seconds=youtube_duration_to_seconds(raw_value))
+            else:
+                raise TypeError(f"type '{type_}' not recognised.")
+
+            setattr(self, attr_name, value)
+
     def _get(self, *keys):
         """Get a data attribute from the stored item response, if it exists.
 
-        If it doesn't, return None.  This could be because the necessary information was not
-        included in the 'part' argument in the original query, or simply because the data
-        attribute doesn't exist in the response.
+        If it doesn't, raise DataMissing exception.  This could be because the necessary
+        information was not included in the 'part' argument in the original query, or because
+        youtube doesn't have the information stored (e.g. if country is not set by the user,
+        the key is not present in the API response).
 
         :param *keys: one or more dictionary keys.  if there's more than one, we'll query
             them recursively, so _get('a', 'b', 'c') will return
@@ -440,13 +525,57 @@ class Resource(object):
         :return: the data attribute
 
         """
-        param = self._data
-        for key in keys:
-            param = param.get(key, None)
-            if param is None:
-                return None
+        def get_from_nested_dict(dict_, *keys):
+            """Get item from a nested dictionary; raise KeyError if it's not there."""
+            param = dict_
+            for key in keys:
+                param = param[key]
+            return param
 
-        return param
+        try:
+            param = get_from_nested_dict(self._data, *keys)
+            return param
+        except KeyError:
+            pass
+
+        try:
+            param = get_from_nested_dict(self._search_data, *keys)
+            return param
+        except KeyError:
+            pass
+
+        raise DataMissing(f"attribute with keys {str(keys)} not present in self._data or "
+                          f"self._search_data.  either it doesn't exist, or that part needs "
+                          f"fetching.")
+
+
+    def __getattr__(self, item):
+        """If an attribute hasn't been set, this function tries to fetch and add it.
+
+        Note: the __getattr__ method is only ever called when an attribute can't be found,
+        therefore there is no need to check if the attribute already exists within this function.
+
+        If the attribute isn't present in ATTRIBUTE_DEFS, raise AttributeError.
+
+        :param item: attribute name
+        :return: attribute value
+
+        """
+        if item not in self.ATTRIBUTE_DEFS:
+            raise AttributeError(f"attribute '{item}' not recognised for resource type "
+                                 f"'{type(self).__name__}'")
+
+        if self._tried_to_fetch.get(item):
+            raise AttributeError(f"already tried to fetch attribute '{item}'")
+
+        # fetch the required part and update to (hopefully) set the required attribute
+        self._fetch(part=self.ATTRIBUTE_DEFS[item].part)
+        self._update_attributes()
+        self._tried_to_fetch[item] = True
+
+        # now getattr() should access the attribute directly.  if not, we'll get an attribute
+        # error from this function because we've logged which items we've tried to fetch.
+        return getattr(self, item)
 
     def _fetch(self, part):
         """Query the API for a specific data part.
@@ -470,65 +599,6 @@ class Resource(object):
         item = response['items'][0]
         self._data.update(item)
 
-    def _update_attributes(self):
-        """Take internally stored raw data and creates attributes with right types etc.
-
-        Attributes defined in ATTRIBUTE_DEFS will be added as attributes, if they exist in
-        internal data storage.
-
-        """
-        for attr_name, attr_def in self.ATTRIBUTE_DEFS.items():
-            # get the value, if it exists in the data store
-            if isinstance(attr_def.name, str):
-                raw_value = self._get(attr_def.part, attr_def.name)
-            else:
-                raw_value = self._get(attr_def.part, *attr_def.name)
-
-            if raw_value is None:
-                if self._data.get(attr_def.part) is not None:
-                    raw_value = ''
-                else:
-                    continue
-
-            if attr_def.type_ is None:
-                value = raw_value
-            elif attr_def.type_ in ('str', 'string'):
-                value = str(raw_value)
-            elif attr_def.type_ in ('int', 'integer'):
-                value = int(raw_value)
-            elif attr_def.type_ == 'float':
-                value = float(raw_value)
-            elif attr_def.type_ == 'list':
-                value = list(raw_value)
-            elif attr_def.type_ == 'datetime':
-                value = string_to_datetime(raw_value)
-            elif attr_def.type_ == 'duration':
-                value = timedelta(seconds=youtube_duration_to_seconds(raw_value))
-            else:
-                raise TypeError(f"type '{attr_def.type_}' not recognised.")
-
-            setattr(self, attr_name, value)
-
-    def __getattr__(self, item):
-        """If an attribute hasn't been set, this function tries to fetch and add it.
-
-        Note: the __getattr__ method is only ever called when an attribute can't be found,
-        therefore there is no need to check if the attribute already exists within this function.
-
-        If the attribute isn't present in ATTRIBUTE_DEFS, raise AttributeError.
-
-        :param item: attribute name
-        :return: attribute value
-
-        """
-        if item in self.ATTRIBUTE_DEFS:
-            self._fetch(part=self.ATTRIBUTE_DEFS[item].part)
-            self._update_attributes()
-            return getattr(self, item)
-
-        raise AttributeError(f"attribute '{item}' not recognised for resource type "
-                             f"'{type(self).__name__}'")
-
 
 class AttributeDef(object):
     """Defines a Resource attribute.
@@ -538,8 +608,14 @@ class AttributeDef(object):
         2. what data type the attribute should have.
 
     This class defines the 'part' (in API terminology) that the attribute can be found in,
-    and it's name (the dictionary key within the 'part'), so that it can be found in the API
+    and it's name (the dictionary key within the part), so that it can be found in the API
     response.
+
+    If a non-existant part is given the API will raise a HttpError.  If a non-existant name is
+    given (within an existing part) then ptyaw will fallback to the default for the given type.
+    This is because it's tricky to know whether an attribute exists from the API response -
+    sometimes an attribute will not be returned if it is null (e.g. if a user does not set a
+    country for their channel it will simply not be returned in the API response).
 
     The data type should also be given as a string ('str', 'int', 'datetime' etc), so that we can
     convert it when we add the data as an attribute to the Resource instance.  If not given or
@@ -567,7 +643,7 @@ class Video(Resource):
         'channel_title': AttributeDef('snippet', 'channelTitle', type_='str'),
         #
         # contentDetails
-        'duration': AttributeDef('contentDetails', 'duration', type_='duration'),
+        'duration': AttributeDef('contentDetails', 'duration', type_='timedelta'),
         #
         # status
         'license': AttributeDef('status', 'license', type_='str'),
@@ -613,14 +689,14 @@ class Channel(Resource):
         if n > 50:
             raise ValueError(f"n must be less than 50, not {n}")
 
-        kwargs = {
+        api_search_params = {
             'part': 'id',
             'channelId': self.id,
             'maxResults': n,
             'order': 'date',
             'type': 'video',
         }
-        response = self.youtube.search(api_params=kwargs)
+        response = self.youtube.search(api_params=api_search_params)
         return response[:n]
 
 

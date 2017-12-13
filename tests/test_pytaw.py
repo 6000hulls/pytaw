@@ -4,8 +4,10 @@ import sys
 import collections
 from datetime import datetime, timedelta
 
+from googleapiclient.errors import HttpError
+
 from pytaw import YouTube
-from pytaw.youtube import Resource, Video
+from pytaw.youtube import Resource, Video, AttributeDef
 
 
 logging.basicConfig(stream=sys.stdout)      # show log output when run with pytest -s
@@ -78,6 +80,19 @@ class TestResource:
         assert a == b
         assert a != c
 
+    def test_unknown_attribute(self, video):
+        with pytest.raises(AttributeError):
+            _ = video.attribute_name_which_definitely_will_never_exist
+
+    def test_unknown_part_in_attributedef(self, video):
+        video.ATTRIBUTE_DEFS['x'] = AttributeDef('nonexistant_part', 'x')
+        with pytest.raises(HttpError):
+            _ = video.x
+
+    def test_unknown_attribute_name_in_attributedef(self, video):
+        video.ATTRIBUTE_DEFS['x'] = AttributeDef('snippet', 'nonexistant_attribute')
+        assert video.x is None
+
 
 class TestVideo:
 
@@ -105,13 +120,18 @@ class TestChannel:
 
 class TestSearch:
 
+    def test_search_with_blank_query(self, youtube):
+        search = youtube.search('')
+        print(search)
+        print(search[0])
+        assert False
+
     def test_video_search_returns_a_video(self, video_search):
         assert isinstance(video_search[0], Video)
 
     def test_video_search_has_many_results(self, video_search):
         # make video_search unlazy (populate pageInfo attributes)
-        video = video_search[0]
-
+        _ = video_search[0]
         assert video_search.total_results > 10000
 
     def test_search_iteration(self, search):
