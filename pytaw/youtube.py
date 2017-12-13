@@ -56,74 +56,69 @@ class YouTube(object):
     def __repr__(self):
         return "<YouTube object>"
 
-    def search(self, q=None, type_=None, before=None, after=None, api_params=None):
+    def search(self, **kwargs):
         """Search YouTube, returning an instance of `ListResponse`.
 
-        :param q: search query
-        :param type_: type of resource to search (by default a search will contain many
-            different resource types, including videos, channels, playlists etc.)
-        :param before: limit results to resources published before this date by providing a
-            datetime instance
-        :param after: limit results to resources published after this date by providing a
-            datetime instance
-        :param api_params: dict of additional api parameters to pass to the search function
+        API parameters should be given as keyword arguments.
+
         :return: ListResponse object containing the requested resource instances
 
         """
-
-        params = {
+        api_params = {
             'part': 'id,snippet',
             'maxResults': 50,
         }
-        if q:
-            params['q'] = q
-        if type_:
-            params['type'] = type_
-        if before:
-            params['publishedBefore'] = datetime_to_string(before)
-        if after:
-            params['publishedAfter'] = datetime_to_string(after)
-        if api_params:
-            params.update(api_params)
+        api_params.update(kwargs)
 
-        query = Query(self, 'search', params)
+        # convert certain parameters from datetime to youtube-compatible string
+        datetime_fields = (
+            'publishedBefore',
+            'publishedAfter',
+        )
+        for field in datetime_fields:
+            try:
+                api_params[field] = datetime_to_string(api_params[field])
+            except KeyError:
+                pass
+
+        query = Query(self, 'search', api_params)
         return ListResponse(query)
 
-    def video(self, id, api_params=None):
+    def video(self, id, **kwargs):
         """Fetch a Video instance.
 
+        Additional API parameters should be given as keyword arguments.
+
         :param id: youtube video id e.g. 'jNQXAC9IVRw'
-        :param api_params: additional api parameters to send with the query
         :return: Video instance if video is found, else None
 
         """
-        params = {
+        api_params = {
             'part': 'id',
             'id': id,
         }
-        if api_params:
-            params.update(api_params)
+        api_params.update(kwargs)
 
-        query = Query(self, 'videos', params)
-        return ListResponse(query)[0]
+        query = Query(self, 'videos', api_params)
+        return ListResponse(query).first()
 
-    def channel(self, id, api_params=None):
+    def channel(self, id, **kwargs):
         """Fetch a Channel instance.
 
+        Additional API parameters should be given as keyword arguments.
+
         :param id: youtube channel id e.g. 'UCMDQxm7cUx3yXkfeHa5zJIQ'
-        :param api_params: extra keyword arguments to send with the query
         :return: Channel instance if channel is found, else None
 
         """
-        params = {
+        api_params = {
             'part': 'id',
             'id': id,
         }
-        if api_params:
-            params.update(api_params)
+        api_params.update(kwargs)
 
-        query = Query(self, 'channels', params)
-        return ListResponse(query)[0]
+        query = Query(self, 'channels', api_params)
+        return ListResponse(query).first()
 
 
 class Query(object):
@@ -274,10 +269,15 @@ class ListResponse(collections.Iterator):
                 for _ in range(index):
                     self.__next__()
             except StopIteration:
-                raise IndexError("list index out of range")
+                self._reset()
+                raise IndexError("index out of range")
 
             # store item to be returned
-            item = self.__next__()
+            try:
+                item = self.__next__()
+            except StopIteration:
+                self._reset()
+                raise IndexError("index out of range")
 
             # reset so that this object can still be used as a generator
             self._reset()
@@ -369,6 +369,12 @@ class ListResponse(collections.Iterator):
         self._listing = raw['items']    # would like a KeyError if this fails (it shouldn't)
         self._list_index = 0
         self._page_count += 1
+
+    def first(self):
+        try:
+            return self[0]
+        except IndexError:
+            return None
 
 
 def create_resource_from_api_response(youtube, item):
@@ -696,7 +702,7 @@ class Channel(Resource):
             'order': 'date',
             'type': 'video',
         }
-        response = self.youtube.search(api_params=api_search_params)
+        response = self.youtube.search(**api_search_params)
         return response[:n]
 
 

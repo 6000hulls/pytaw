@@ -24,25 +24,25 @@ def youtube():
 @pytest.fixture
 def video(youtube):
     """A Video instance for the classic video 'Me at the zoo'"""
-    return youtube.video(id='jNQXAC9IVRw')
+    return youtube.video('jNQXAC9IVRw')
 
 
 @pytest.fixture
 def channel(youtube):
     """A Channel instance for the 'YouTube Help' channel"""
-    return youtube.channel(id='UCMDQxm7cUx3yXkfeHa5zJIQ')
+    return youtube.channel('UCMDQxm7cUx3yXkfeHa5zJIQ')
 
 
 @pytest.fixture
 def search(youtube):
     """A ListResponse instance corresponding to a search for the query 'python'"""
-    return youtube.search(q='python')
+    return youtube.search()
 
 
 @pytest.fixture
 def video_search(youtube):
     """A ListResponse instance corresponding to a video search for the query 'python'"""
-    return youtube.search(q='python', type_='video')
+    return youtube.search(q='python', type='video')
 
 
 @pytest.fixture
@@ -53,20 +53,20 @@ def video_search_array(youtube):
     return [
         #
         # no results
-        youtube.search(q='minecraft', type_='video', before=datetime(2000, 1, 1)),
+        youtube.search(q='minecraft', type='video', publishedBefore=datetime(2000, 1, 1)),
         #
         # less than 100 results
-        youtube.search(q='minecraft', type_='video', before=datetime(2005, 7, 1)),
+        youtube.search(q='minecraft', type='video', publishedBefore=datetime(2005, 7, 1)),
         #
         # over 100 results
-        youtube.search(q='minecraft', type_='video', before=datetime(2006, 1, 1)),
+        youtube.search(q='minecraft', type='video', publishedBefore=datetime(2006, 1, 1)),
         #
         # variable number of results (hundreds or thousands...?)
-        youtube.search(q='minecraft', type_='video', after=one_minute_ago),
-        youtube.search(q='minecraft', type_='video', after=five_minutes_ago),
+        youtube.search(q='minecraft', type='video', publishedAfter=one_minute_ago),
+        youtube.search(q='minecraft', type='video', publishedAfter=five_minutes_ago),
         #
         # over a million results
-        youtube.search(q='minecraft', type_='video'),
+        youtube.search(q='minecraft', type='video'),
         youtube.search(q='minecraft'),
     ]
 
@@ -96,6 +96,10 @@ class TestResource:
 
 class TestVideo:
 
+    def test_bad_video_id(self, youtube):
+        video = youtube.video('not_a_valid_youtube_video_id')
+        assert video is None
+
     def test_title(self, video):
         assert video.title == "Me at the zoo"
 
@@ -119,12 +123,6 @@ class TestChannel:
 
 
 class TestSearch:
-
-    def test_search_with_blank_query(self, youtube):
-        search = youtube.search('')
-        print(search)
-        print(search[0])
-        assert False
 
     def test_video_search_returns_a_video(self, video_search):
         assert isinstance(video_search[0], Video)
