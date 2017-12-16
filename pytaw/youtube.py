@@ -7,9 +7,15 @@ import collections
 import itertools
 from pprint import pprint, pformat
 from abc import ABC, abstractmethod
-import googleapiclient.discovery
 
-from .utils import datetime_to_string, string_to_datetime, youtube_duration_to_seconds
+import googleapiclient.discovery
+from oauth2client.client import AccessTokenCredentials
+
+from .utils import (
+    datetime_to_string,
+    string_to_datetime,
+    youtube_duration_to_seconds,
+)
 
 
 log = logging.getLogger(__name__)
@@ -29,30 +35,47 @@ class YouTube(object):
 
     """
 
-    def __init__(self, key=None):
+    def __init__(self, key=None, access_token=None):
         """Initialise the YouTube class.
 
         :param key: developer api key (you need to get this from google)
+        :param access_token: access token from some other oauth2 authentication flow
 
         """
-        # developer api key may be specified at initialisation, or in a config file
-        if key is None:
-            config_file_path = os.path.join(os.path.expanduser('~'), ".pytaw.conf")
-            if os.path.exists(config_file_path):
-                config = configparser.ConfigParser()
-                config.read(config_file_path)
-                self.key = config['youtube']['developer_key']
-            else:
-                raise ValueError("api key not provided.")
-        else:
-            self.key = key
+        if key is not None and access_token is not None:
+            raise ValueError("you should provide a developer key or an access token, but not both")
 
-        self.build = googleapiclient.discovery.build(
-            'youtube',
-            'v3',
-            developerKey=self.key,
-            cache_discovery=False,      # suppress a warning
-        )
+        build_kwargs = {
+            'serviceName': 'youtube',
+            'version': 'v3',
+            'cache_discovery': False,    # suppress an annoying warning
+        }
+
+        if access_token is not None:
+            # build credentials using given access token
+            credentials = AccessTokenCredentials(access_token=access_token, user_agent='pytaw')
+            build_kwargs['credentials'] = credentials
+
+        else:
+            # use a develop key, either passed directly or from a config file
+            if key is not None:
+                developer_key = key
+
+            else:
+                # neither an access token or a key has been given, so look for a developer key in
+                #  the default config file
+                config_file_path = os.path.join(os.path.expanduser('~'), ".pytaw.conf")
+                if os.path.exists(config_file_path):
+                    config = configparser.ConfigParser()
+                    config.read(config_file_path)
+                    developer_key = config['youtube']['developer_key']
+                else:
+                    raise ValueError("didn't find a developer key or an access token.")
+
+            build_kwargs['developerKey'] = developer_key
+
+        # build_kwargs now contains credentials, or a developer key
+        self.build = googleapiclient.discovery.build(**build_kwargs)
 
     def __repr__(self):
         return "<YouTube object>"
@@ -83,6 +106,24 @@ class YouTube(object):
                 pass
 
         query = Query(self, 'search', api_params)
+        return ListResponse(query)
+
+    def subsciptions(self, **kwargs):
+        """Fetch list of channels that the authenticated user is subscribed to.
+
+        API parameters should be given as keyword arguments.
+
+        :return: ListResponse object containing channel instances
+
+        """
+        api_params = {
+            'part': 'id,snippet',
+            'mine': True,
+            'maxResults': 50,
+        }
+        api_params.update(kwargs)
+
+        query = Query(self, 'subscriptions', api_params)
         return ListResponse(query)
 
     def video(self, id, **kwargs):
@@ -144,6 +185,7 @@ class Query(object):
             'search': self.youtube.build.search().list,
             'videos': self.youtube.build.videos().list,
             'channels': self.youtube.build.channels().list,
+            'subscriptions': self.youtube.build.subscriptions().list,
         }
 
         try:
@@ -397,6 +439,9 @@ def create_resource_from_api_response(youtube, item):
         return Channel(youtube, id, item)
     elif kind == 'playlist':
         return Playlist(youtube, id, item)
+    elif kind == 'subscription':
+        channel_id = item['snippet']['resourceId']['channelId']
+        return Channel(youtube, id=channel_id)
     else:
         raise NotImplementedError(f"can't deal with resource kind '{kind}'")
 
