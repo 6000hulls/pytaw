@@ -65,6 +65,9 @@ class YouTube(object):
                 # neither an access token or a key has been given, so look for a developer key in
                 #  the default config file
                 config_file_path = os.path.join(os.path.expanduser('~'), ".pytaw.conf")
+                if not os.path.exists(config_file_path):
+                    config_file_path = "/etc/pytaw.conf"
+                    
                 if os.path.exists(config_file_path):
                     config = configparser.ConfigParser()
                     config.read(config_file_path)
