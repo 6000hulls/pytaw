@@ -734,6 +734,9 @@ class Video(Resource):
     def channel(self):
         return self.youtube.channel(id=self.channel_id)
 
+    @property
+    def url(self):
+        return f"https://www.youtube.com/watch?v={self.id}"
 
 class Channel(Resource):
     """A single YouTube channel."""
