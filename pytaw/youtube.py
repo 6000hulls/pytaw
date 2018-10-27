@@ -517,6 +517,9 @@ class Thumbnail(object):
         self.width = width
         self.height = height
 
+    def __repr__(self):
+        return f'<Thumbnail {self.id} {self.width}x{self.height} {self.url}>'
+
 
 class Resource(ABC):
     """Base class for YouTube resource classes, e.g. Video, Channel etc."""
