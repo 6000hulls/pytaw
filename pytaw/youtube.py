@@ -7,6 +7,7 @@ import collections
 import itertools
 from pprint import pprint, pformat
 from abc import ABC, abstractmethod
+import typing
 
 import googleapiclient.discovery
 from oauth2client.client import AccessTokenCredentials
@@ -15,6 +16,7 @@ from .utils import (
     datetime_to_string,
     string_to_datetime,
     youtube_duration_to_seconds,
+    iterate_chunks,
 )
 
 
@@ -111,7 +113,7 @@ class YouTube(object):
         query = Query(self, 'search', api_params)
         return ListResponse(query)
 
-    def subsciptions(self, **kwargs):
+    def subscriptions(self, **kwargs):
         """Fetch list of channels that the authenticated user is subscribed to.
 
         API parameters should be given as keyword arguments.
@@ -147,6 +149,25 @@ class YouTube(object):
         query = Query(self, 'videos', api_params)
         return ListResponse(query).first()
 
+    def videos(self, id_list: typing.Iterable[str], **kwargs):
+        """Fetch multiple videos.
+
+        :param id_list: List of video IDs to fetch
+        :return: Iterable list of video objects.
+        """
+        response_list = []
+        for id_list_chunk in iterate_chunks(id_list, 50):
+            api_params = {
+                'part': 'id',
+                'id': ','.join(id_list_chunk),
+            }
+            api_params.update(kwargs)
+
+            query = Query(self, 'videos', api_params)
+            response_list.append(ListResponse(query))
+
+        return itertools.chain(response_list)
+
     def channel(self, id, **kwargs):
         """Fetch a Channel instance.
 
@@ -164,6 +185,42 @@ class YouTube(object):
 
         query = Query(self, 'channels', api_params)
         return ListResponse(query).first()
+
+    def playlist(self, id, **kwargs):
+        """Fetch a Playlist instance.
+
+        Additional API parameters should be given as keyword arguments.
+
+        :param id: youtube channel id e.g. 'UCMDQxm7cUx3yXkfeHa5zJIQ'
+        :return: Channel instance if channel is found, else None
+
+        """
+        api_params = {
+            'part': 'id',
+            'id': id,
+        }
+        api_params.update(kwargs)
+
+        query = Query(self, 'playlists', api_params)
+        return ListResponse(query).first()
+
+    def playlist_items(self, id, **kwargs):
+        """Fetch a Playlist instance.
+
+        Additional API parameters should be given as keyword arguments.
+
+        :param id: youtube channel id e.g. 'UCMDQxm7cUx3yXkfeHa5zJIQ'
+        :return: Channel instance if channel is found, else None
+
+        """
+        api_params = {
+            'part': 'id,snippet',
+            'playlistId': id,
+        }
+        api_params.update(kwargs)
+
+        query = Query(self, 'playlist_items', api_params)
+        return ListResponse(query)
 
 
 class Query(object):
@@ -189,6 +246,8 @@ class Query(object):
             'videos': self.youtube.build.videos().list,
             'channels': self.youtube.build.channels().list,
             'subscriptions': self.youtube.build.subscriptions().list,
+            'playlists': self.youtube.build.playlists().list,
+            'playlist_items': self.youtube.build.playlistItems().list,
         }
 
         try:
@@ -445,8 +504,18 @@ def create_resource_from_api_response(youtube, item):
     elif kind == 'subscription':
         channel_id = item['snippet']['resourceId']['channelId']
         return Channel(youtube, id=channel_id)
+    elif kind == 'playlistItem':
+        return PlaylistItem(youtube, id, item)
     else:
         raise NotImplementedError(f"can't deal with resource kind '{kind}'")
+
+
+class Thumbnail(object):
+    def __init__(self, id: str, url: str, width: int, height: int):
+        self.id = id
+        self.url = url
+        self.width = width
+        self.height = height
 
 
 class Resource(ABC):
@@ -579,6 +648,13 @@ class Resource(ABC):
                 value = string_to_datetime(raw_value)
             elif type_ == 'timedelta':
                 value = timedelta(seconds=youtube_duration_to_seconds(raw_value))
+            elif type_ == 'thumbnails':
+                value = []
+                for key, val in raw_value.items():
+                    url = val.get('url', None)
+                    width = val.get('width', None)
+                    height = val.get('width', None)
+                    value.append(Thumbnail(key, url, width, height))
             else:
                 raise TypeError(f"type '{type_}' not recognised.")
 
@@ -741,6 +817,7 @@ class Video(Resource):
     def url(self):
         return f"https://www.youtube.com/watch?v={self.id}"
 
+
 class Channel(Resource):
     """A single YouTube channel."""
 
@@ -751,7 +828,7 @@ class Channel(Resource):
         'title': AttributeDef('snippet', 'title'),
         'description': AttributeDef('snippet', 'description'),
         'published_at': AttributeDef('snippet', 'publishedAt', type_='datetime'),
-        'thumbnail_url': AttributeDef('snippet', ['thumbnails', 'default', 'url'], type_='str'),
+        'thumbnails': AttributeDef('snippet', 'thumbnails', type_='thumbnails'),
         'country': AttributeDef('snippet', 'country', type_='str'),
         #
         # statistics
@@ -759,7 +836,18 @@ class Channel(Resource):
         'n_subscribers': AttributeDef('statistics', 'subscriberCount', type_='int'),
         'n_views': AttributeDef('statistics', 'viewCount', type_='int'),
         'n_comments': AttributeDef('statistics', 'commentCount', type_='int'),
+        #
+        # playlists
+        '_related_playlists': AttributeDef('contentDetails', 'relatedPlaylists')
     }
+
+    def get_uploads_playlist(self):
+        playlists = self._related_playlists
+        if 'uploads' in playlists:
+            return self.youtube.playlist(playlists['uploads'])
+        return None
+
+    uploads_playlist = property(get_uploads_playlist)
 
     def most_recent_upload(self):
         response = self.most_recent_uploads(n=1)
@@ -791,3 +879,38 @@ class Playlist(Resource):
         'description': AttributeDef('snippet', 'description'),
         'published_at': AttributeDef('snippet', 'publishedAt', type_='datetime'),
     }
+
+    def get_items(self):
+        api_params = {
+            'part': 'id,snippet',
+            'maxResults': 50,
+        }
+        return self.youtube.playlist_items(self.id, **api_params)
+
+    items = property(get_items)
+
+
+class PlaylistItem(Resource):
+    """A playlist item."""
+    ENDPOINT = 'playlist_items'
+    ATTRIBUTE_DEFS = {
+        #
+        # snippet
+        'title': AttributeDef('snippet', 'title'),
+        'description': AttributeDef('snippet', 'description'),
+        'channel_id': AttributeDef('snippet', 'channelId', type_='str'),
+        'published_at': AttributeDef('snippet', 'publishedAt', type_='datetime'),
+        'thumbnails': AttributeDef('snippet', 'thumbnails', type_='thumbnails'),
+        'channel_title': AttributeDef('snippet', 'channelTitle', type_='str'),
+        'playlist_id': AttributeDef('snippet', 'playlistId', type_='str'),
+        'position': AttributeDef('snippet', 'position', type_='int'),
+        'resource_kind': AttributeDef('snippet', ['resourceId', 'kind'], type_='str'),
+        'resource_video_id': AttributeDef('snippet', ['resourceId', 'videoId'], type_='str'),
+    }
+
+    def get_video(self):
+        if self.resource_kind == 'youtube#video':
+            return self.youtube.video(self.resource_video_id)
+        return None
+
+    video = property(get_video)

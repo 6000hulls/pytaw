@@ -1,9 +1,10 @@
 import re
 import urllib.parse
+import typing
 from datetime import datetime, timezone
 
 import dateutil.parser
-
+import itertools
 
 def string_to_datetime(string):
     if string is None:
@@ -73,3 +74,19 @@ def youtube_duration_to_seconds(value):
         d['minutes']*60 +
         d['seconds']
     )
+
+
+def iterate_chunks(iterable: typing.Iterable, chunk_size: int):
+    """
+    Iterates an iterable in chunks of chunk_size elements.
+    :param iterable: An iterable containing items to iterate.
+    :param chunk_size: Chunk size
+    :return: Returns a generator which will yield chunks of size chunk_size
+    """
+
+    it = iter(iterable)
+    while True:
+        chunk = tuple(itertools.islice(it, chunk_size))
+        if not chunk:
+            return
+        yield chunk
