@@ -110,7 +110,9 @@ class TestVideo:
         assert video.n_views > int(40e6)
 
     def test_tags(self, video):
-        assert video.tags == ['jawed', 'karim', 'elephant', 'zoo', 'youtube', 'first', 'video']
+        # either these were changed recently or the way youtube handles tags changed, i'm not sure
+        # assert video.tags == ['jawed', 'karim', 'elephant', 'zoo', 'youtube', 'first', 'video']
+        assert video.tags == ['me at the zoo', 'jawed karim', 'first youtube video']
 
     def test_duration(self, video):
         assert video.duration.total_seconds() == 19
