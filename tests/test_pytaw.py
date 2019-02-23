@@ -12,7 +12,7 @@ from pytaw.youtube import Resource, Video, AttributeDef
 
 logging.basicConfig(stream=sys.stdout)      # show log output when run with pytest -s
 log = logging.getLogger(__name__)
-log.setLevel(logging.INFO)
+log.setLevel(logging.DEBUG)
 
 
 @pytest.fixture
@@ -161,7 +161,10 @@ class TestListResponse:
         """
         for i, search in enumerate(video_search_array):
             c = 0
+
+            log.debug(f"checking all results for search #{i}")
             for _ in search:
+                print(_)
                 c += 1
 
             log.debug(f"checked first {c} results (search #{i})")

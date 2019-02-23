@@ -287,6 +287,7 @@ class ListResponse(collections.Iterator):
             self._no_more_pages = True      # unnecessary but true
             raise StopIteration()
 
+        # return the resource.  might be None if api response is a "topic" or some bullshit.
         self._list_index += 1
         self._item_count += 1
         return create_resource_from_api_response(self.youtube, item)
@@ -430,9 +431,15 @@ def create_resource_from_api_response(youtube, item):
     # wrangling. but we only extract the data - don't alter anything in the api response item!
     kind = item['kind'].replace('youtube#', '')
     if kind == 'searchResult':
-        kind = item['id']['kind'].replace('youtube#', '')
-        id_label = kind + 'Id'
-        id = item['id'][id_label]
+        try:
+            kind = item['id']['kind'].replace('youtube#', '')
+            id_label = kind + 'Id'
+            id = item['id'][id_label]
+        except KeyError:
+            # topics (and possibly other kinds of search results?) have no 'id' field
+            # let's ignore those for now
+            # TODO: deal with topics in search results
+            return None
     else:
         id = item['id']
 
